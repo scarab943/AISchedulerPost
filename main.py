@@ -28,7 +28,7 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("در حال تولید پست با تصویر هوش مصنوعی... لطفاً صبور باشید.")
     
     try:
-        # ۱. استفاده از متن پیش‌فرض جذاب برای تلگرام
+        # ۱. متن پیش‌فرض جذاب برای تلگرام
         post_text = (
             "🚀 فناوری و آینده هوش مصنوعی\n\n"
             "جهان پیرامون ما با سرعت در حال تغییر است. هوش مصنوعی دیگر یک رویا نیست، "
@@ -36,14 +36,15 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✨ مسیر موفقیت خود را هم‌اکنون بسازید!"
         )
 
-        # ۲. تولید تصویر با سرویس رایگان Pollinations AI
+        # ۲. تولید تصویر با سرویس رایگان و تنظیمات پایدار
         image_prompt = "A modern futuristic workspace, high quality, digital art, cyberpunk style"
         encoded_prompt = requests.utils.quote(image_prompt)
-        image_url = f"https://pollinations.ai/p/{encoded_prompt}"
+        image_url = f"https://pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&nologo=true"
         
-        img_response = requests.get(image_url)
+        # افزودن timeout به میزان ۳۰ ثانیه برای جلوگیری از خطای پردازش تصویر
+        img_response = requests.get(image_url, timeout=30)
         
-        if img_response.status_code == 200:
+        if img_response.status_code == 200 and len(img_response.content) > 500:
             image_bytes = img_response.content
             
             # ۳. ارسال عکس و متن به کانال تلگرام
@@ -54,7 +55,7 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await update.message.reply_text("پست با موفقیت در کانال منتشر شد!")
         else:
-            await update.message.reply_text("خطا در دریافت تصویر از سرور.")
+            await update.message.reply_text("خطا: تصویر به درستی از سرور دریافت نشد یا زمان‌بندی به پایان رسید.")
 
     except Exception as e:
         await update.message.reply_text(f"خطایی رخ داد: {str(e)}")
