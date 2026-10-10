@@ -1,9 +1,11 @@
 import os
+import json
 import logging
 from io import BytesIO
 from urllib.parse import quote
 
 import requests
+import google.generativeai as genai
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
@@ -14,59 +16,165 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ---------- متغیرهای محیطی ----------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "@KriptoKlik")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+POST_INTERVAL_SECONDS = int(os.getenv("POST_INTERVAL_SECONDS", "21600"))  # ۶ ساعت
 
-# فاصله زمانی ارسال خودکار (به ثانیه) — ۶ ساعت = 21600
-POST_INTERVAL_SECONDS = int(os.getenv("POST_INTERVAL_SECONDS", "21600"))
+genai.configure(api_key=GEMINI_API_KEY)
+MODEL = genai.GenerativeModel("gemini-1.5-flash")
+
+AUTO_JOB_NAME = "auto_post"
 
 
 def is_admin(update: Update) -> bool:
     return bool(update.effective_user) and update.effective_user.id == ADMIN_ID
 
 
+# ---------- ۱. گرفتن قیمت لحظه‌ای ----------
+def fetch_crypto_data():
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {
+        "vs_currency": "usd",
+        "ids": "bitcoin,ethereum",
+        "order": "market_cap_desc",
+        "sparkline": "false",
+        "price_change_percentage": "24h,7d",
+    }
+    r = requests.get(url, params=params, timeout=20)
+    r.raise_for_status()
+    data = r.json()
+
+    lines = []
+    for coin in data:
+        name = coin["name"]
+        symbol = coin["symbol"].upper()
+        price = coin["current_price"]
+        change_24h = coin.get("price_change_percentage_24h") or 0
+        change_7d = coin.get("price_change_percentage_7d_in_currency") or 0
+        arrow_24 = "🔺" if change_24h >= 0 else "🔻"
+        arrow_7 = "🔺" if change_7d >= 0 else "🔻"
+
+        lines.append(
+            f"• {name} ({symbol}): ${price:,.0f} | "
+            f"۲۴ ساعت: {arrow_24} {change_24h:+.2f}% | "
+            f"۷ روز: {arrow_7} {change_7d:+.2f}%"
+        )
+
+    return data, "\n".join(lines)
+
+
+# ---------- ۲. گرفتن نمودار از QuickChart ----------
+def build_chart_url(coin_id: str) -> str:
+    """قیمت ۷ روز اخیر رو می‌گیره و نمودار خطی QuickChart می‌سازه."""
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+    params = {"vs_currency": "usd", "days": "7"}
+    r = requests.get(url, params=params, timeout=20)
+    r.raise_for_status()
+    prices = r.json()["prices"]
+
+    # فقط هر ۱۲ ساعت یه نقطه (روزی ۲ نقطه → ۱۴ نقطه)
+    step = max(1, len(prices) // 14)
+    sampled = prices[::step][:14]
+
+    labels = [f"{i+1}" for i in range(len(sampled))]
+    data_points = [round(p[1], 2) for p in sampled]
+    color = "#f7931a" if coin_id == "bitcoin" else "#627eea"
+
+    chart_config = {
+        "type": "line",
+        "data": {
+            "labels": labels,
+            "datasets": [{
+                "label": f"{coin_id.upper()} Price (7d)",
+                "data": data_points,
+                "borderColor": color,
+                "backgroundColor": color + "33",
+                "fill": True,
+                "tension": 0.4,
+                "pointRadius": 0,
+            }]
+        },
+        "options": {
+            "legend": {"display": False},
+            "scales": {
+                "xAxes": [{"gridLines": {"display": False}}],
+                "yAxes": [{"gridLines": {"color": "#333"}}],
+            }
+        }
+    }
+
+    encoded = quote(json.dumps(chart_config), safe="")
+    return (
+        f"https://quickchart.io/chart?c={encoded}"
+        f"&w=800&h=400&bg=0f0f0f&f=png"
+    )
+
+
+# ---------- ۳. تولید متن با Gemini ----------
+def generate_post_text(market_summary: str) -> str:
+    prompt = f"""تو یک تولیدکننده محتوای فارسی برای یک کانال تلگرامی کریپتو به اسم «کریپتو کلیک» هستی.
+وظیفه‌ت اینه که بر اساس داده‌های زیر یه پست جذاب، صمیمی و خودمونی بنویسی.
+
+داده‌های بازار:
+{market_summary}
+
+شرایط پست:
+- لحن: صمیمی و خودمونی، مثل یه دوست که داره تحلیل می‌کنه
+- فارسی روان، بدون کلمه‌های انگلیسی اضافه
+- شروع با یه جمله‌ی قلاب‌دار
+- ۱ تا ۲ جمله تحلیل کوتاه از وضعیت
+- حداقل ۵ تا ۸ ایموجی مرتبط در کل متن
+- حتماً این هشتگ‌ها آخرش باشه: #کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری
+- حتماً این CTA آخرش باشه: «🔔 برای تحلیل‌های روزانه ما رو دنبال کنید: @KriptoKlik»
+- کل متن بین ۳ تا ۵ خط باشه (کوتاه و خوانا)
+- از Markdown یا کاراکترهای عجیب استفاده نکن
+
+فقط خود متن پست رو برگردون، هیچ توضیح اضافه‌ای نده."""
+
+    resp = MODEL.generate_content(prompt)
+    return resp.text.strip()
+
+
+# ---------- ۴. ساخت و ارسال پست ----------
 async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
-    """تولید تصویر + ارسال به کانال. هم از دستور و هم از زمان‌بند استفاده میشه."""
-    post_text = (
-        "🚀 <b>فناوری و آینده هوش مصنوعی</b>\n\n"
-        "جهان پیرامون ما با سرعت در حال تغییر است. هوش مصنوعی دیگر یک رویا نیست، "
-        "بلکه ابزاری قدرتمند برای ساخت آینده‌ای بهتر است.\n\n"
-        "✨ مسیر موفقیت خود را هم‌اکنون بسازید!"
-    )
+    # ۱) داده بازار
+    market_data, summary = fetch_crypto_data()
+    logger.info("Market data fetched: %s", summary.replace("\n", " | "))
 
-    image_prompt = "A modern futuristic workspace, high quality, digital art, cyberpunk style"
-    encoded_prompt = quote(image_prompt, safe="")
-    image_url = (
-        f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-        f"?width=1024&height=1024&nologo=true"
-    )
+    # ۲) متن پست از Gemini
+    post_text = generate_post_text(summary)
 
-    r = requests.get(image_url, timeout=90)
-    if r.status_code != 200 or len(r.content) < 500:
-        raise RuntimeError(f"تصویر دریافت نشد (کد {r.status_code})")
+    # ۳) نمودار بیت‌کوین
+    chart_url = build_chart_url("bitcoin")
+    img_resp = requests.get(chart_url, timeout=60)
+    img_resp.raise_for_status()
 
-    photo = BytesIO(r.content)
-    photo.name = "post.jpg"
+    # ۴) ارسال به کانال
+    photo = BytesIO(img_resp.content)
+    photo.name = "chart.png"
 
     await context.bot.send_photo(
         chat_id=TARGET_CHANNEL,
         photo=photo,
         caption=post_text,
-        parse_mode=ParseMode.HTML,
+        parse_mode=ParseMode.HTML if "<" in post_text else None,
     )
 
 
+# ---------- دستورات ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام! 👋\n\n"
         "دستورات:\n"
-        "/generate_post — ارسال فوری پست به کانال\n"
+        "/generate_post — ارسال فوری پست هوشمند\n"
         "/set_channel @name — تغییر کانال مقصد\n"
         "/show_channel — نمایش کانال فعلی\n"
         "/auto_on — روشن کردن ارسال خودکار هر ۶ ساعت\n"
-        "/auto_off — خاموش کردن ارسال خودکار\n"
-        "/auto_status — وضعیت ارسال خودکار"
+        "/auto_off — خاموش کردن\n"
+        "/auto_status — وضعیت"
     )
 
 
@@ -94,41 +202,30 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️ شما اجازه این کار را ندارید.")
         return
-
-    await update.message.reply_text("⏳ در حال تولید پست...")
+    await update.message.reply_text("⏳ در حال ساخت پست هوشمند... (۱۵–۳۰ ثانیه)")
     try:
         await build_and_send_post(context)
-        await update.message.reply_text("✅ پست با موفقیت منتشر شد.")
-    except requests.exceptions.Timeout:
-        await update.message.reply_text("❌ زمان انتظار تمام شد. دوباره تلاش کن.")
-    except Exception:
-        logger.exception("Error generating post")
-        await update.message.reply_text("❌ خطای غیرمنتظره‌ای رخ داد.")
+        await update.message.reply_text("✅ پست هوشمند با موفقیت منتشر شد.")
+    except Exception as e:
+        logger.exception("Error in generate_post")
+        await update.message.reply_text(f"❌ خطا: {type(e).__name__}")
 
 
-# ----- زمان‌بند -----
-
-AUTO_JOB_NAME = "auto_post"
-
-
+# ---------- زمان‌بند ----------
 async def auto_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️ شما اجازه این کار را ندارید.")
         return
-
-    # اگه قبلاً فعال بوده، پاکش کن که دوتا نشه
     for job in context.job_queue.get_jobs_by_name(AUTO_JOB_NAME):
         job.schedule_removal()
-
     context.job_queue.run_repeating(
         auto_post_job,
         interval=POST_INTERVAL_SECONDS,
-        first=POST_INTERVAL_SECONDS,   # اولین اجرا بعد از ۶ ساعت
+        first=POST_INTERVAL_SECONDS,
         name=AUTO_JOB_NAME,
     )
-    hours = POST_INTERVAL_SECONDS / 3600
     await update.message.reply_text(
-        f"✅ ارسال خودکار روشن شد. هر {hours:g} ساعت یه پست میره توی {TARGET_CHANNEL}."
+        f"✅ ارسال خودکار روشن شد. هر {POST_INTERVAL_SECONDS // 3600} ساعت."
     )
 
 
@@ -138,7 +235,7 @@ async def auto_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     jobs = context.job_queue.get_jobs_by_name(AUTO_JOB_NAME)
     if not jobs:
-        await update.message.reply_text("ℹ️ ارسال خودکار از قبل خاموش بود.")
+        await update.message.reply_text("ℹ️ از قبل خاموش بود.")
         return
     for job in jobs:
         job.schedule_removal()
@@ -151,29 +248,28 @@ async def auto_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         nxt = jobs[0].next_t.strftime("%Y-%m-%d %H:%M UTC")
         await update.message.reply_text(f"🟢 فعال — اجرای بعدی: {nxt}")
     else:
-        await update.message.reply_text("🔴 ارسال خودکار خاموش است.")
+        await update.message.reply_text("🔴 خاموش است.")
 
 
 async def auto_post_job(context: ContextTypes.DEFAULT_TYPE):
-    """این تابع توسط JobQueue هر ۶ ساعت صدا زده میشه."""
     logger.info("Auto-post job running...")
     try:
         await build_and_send_post(context)
-        logger.info("Auto-post sent to %s", TARGET_CHANNEL)
+        logger.info("Auto-post sent.")
     except Exception:
         logger.exception("Auto-post failed")
 
 
-# ----- راه‌اندازی -----
-
+# ---------- راه‌اندازی ----------
 def main():
     if not TELEGRAM_TOKEN:
-        raise SystemExit("TELEGRAM_BOT_TOKEN تنظیم نشده است.")
+        raise SystemExit("TELEGRAM_BOT_TOKEN تنظیم نشده.")
+    if not GEMINI_API_KEY:
+        raise SystemExit("GEMINI_API_KEY تنظیم نشده.")
     if not ADMIN_ID:
-        logger.warning("⚠️ ADMIN_ID تنظیم نشده — دستورات برای هیچ‌کس اجرا نمی‌شوند.")
+        logger.warning("⚠️ ADMIN_ID تنظیم نشده.")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("show_channel", show_channel))
     app.add_handler(CommandHandler("set_channel", set_channel))
