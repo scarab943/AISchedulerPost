@@ -1,9 +1,10 @@
 import os
 import logging
+import io
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import google.generativeai as genai
-import requests
+from huggingface_hub import InferenceClient
 
 # تنظیمات لاگ‌گیری
 logging.basicConfig(
@@ -16,13 +17,12 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 HUGGINGFACE_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
-# تنظیمات Gemini با مدل جدید معرفی‌شده در خطا
+# تنظیمات Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-3.8-flash')
 
-# مدل ساخت عکس در Hugging Face
-HF_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-headers = {"Authorization": f"Bearer {HUGGINGFACE_KEY}"}
+# راه‌اندازی کلاینت استاندارد Hugging Face
+hf_client = InferenceClient(token=HUGGINGFACE_KEY)
 
 # متغیر برای ذخیره آدرس کانال
 TARGET_CHANNEL = "@your_channel_username"
@@ -44,24 +44,25 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = gemini_model.generate_content(prompt_text)
         post_text = response.text
 
-        # ۲. تولید تصویر با Hugging Face
+        # ۲. تولید تصویر با کتابخانه رسمی Hugging Face
         image_prompt = "A modern futuristic workspace, high quality, digital art"
-        payload = {"inputs": image_prompt}
+        image = hf_client.text_to_image(
+            image_prompt,
+            model="stabilityai/stable-diffusion-xl-base-1.0"
+        )
         
-        img_response = requests.post(HF_API_URL, headers=headers, json=payload)
+        # تبدیل تصویر PIL به بایت برای ارسال در تلگرام
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='JPEG')
+        image_bytes = img_byte_arr.getvalue()
         
-        if img_response.status_code == 200:
-            image_bytes = img_response.content
-            
-            # ۳. ارسال عکس و متن به کانال تلگرام
-            await context.bot.send_photo(
-                chat_id=TARGET_CHANNEL,
-                photo=image_bytes,
-                caption=post_text
-            )
-            await update.message.reply_text("پست با موفقیت در کانال منتشر شد!")
-        else:
-            await update.message.reply_text(f"خطا در ساخت تصویر: {img_response.text}")
+        # ۳. ارسال عکس و متن به کانال تلگرام
+        await context.bot.send_photo(
+            chat_id=TARGET_CHANNEL,
+            photo=image_bytes,
+            caption=post_text
+        )
+        await update.message.reply_text("پست با موفقیت در کانال منتشر شد!")
 
     except Exception as e:
         await update.message.reply_text(f"خطایی رخ داد: {str(e)}")
