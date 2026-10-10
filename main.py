@@ -5,7 +5,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import google.generativeai as genai
 import requests
 
-# تنظیمات لاگ‌گیری برای بررسی خطاها
+# تنظیمات لاگ‌گیری
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -16,10 +16,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 HUGGINGFACE_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
-# تنظیمات Gemini
+# تنظیمات Gemini با مدل استاندارد gemini-pro
 genai.configure(api_key=GEMINI_API_KEY)
-# استفاده از مدل استاندارد و به‌روز جمینای
-gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+gemini_model = genai.GenerativeModel('gemini-pro')
 
 # مدل ساخت عکس در Hugging Face
 HF_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
@@ -68,10 +67,7 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"خطایی رخ داد: {str(e)}")
 
 def main():
-    # راه‌اندازی ربات تلگرام
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-    # تعریف دستورات ربات
     app.add_handler(CommandHandler("set_channel", set_channel))
     app.add_handler(CommandHandler("generate_post", generate_post))
 
