@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import logging
 import threading
 from io import BytesIO
@@ -29,7 +30,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "@KriptoKlik")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-POST_INTERVAL_SECONDS = int(os.getenv("POST_INTERVAL_SECONDS", "21600"))  # ۶ ساعت
+POST_INTERVAL_SECONDS = int(os.getenv("POST_INTERVAL_SECONDS", "21600"))
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -42,7 +43,7 @@ def is_admin(update: Update) -> bool:
     return bool(update.effective_user) and update.effective_user.id == ADMIN_ID
 
 
-# ---------- وب‌سرور کوچیک برای UptimeRobot ----------
+# ---------- وب‌سرور ----------
 async def health(request):
     return web.Response(text="OK")
 
@@ -56,7 +57,7 @@ def run_web_server():
     web.run_app(app, host="0.0.0.0", port=port, print=None)
 
 
-# ---------- ۱. گرفتن قیمت لحظه‌ای ----------
+# ---------- ۱. قیمت لحظه‌ای با retry ----------
 def fetch_crypto_data():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {
@@ -66,9 +67,26 @@ def fetch_crypto_data():
         "sparkline": "false",
         "price_change_percentage": "24h,7d",
     }
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    data = r.json()
+
+    last_error = None
+    data = None
+    for attempt in range(4):
+        try:
+            r = requests.get(url, params=params, timeout=20)
+            if r.status_code == 429:
+                wait = 10 * (attempt + 1)
+                logger.warning("CoinGecko rate limit (429). Waiting %ds...", wait)
+                time.sleep(wait)
+                last_error = "rate limit"
+                continue
+            r.raise_for_status()
+            data = r.json()
+            break
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            time.sleep(5)
+    if data is None:
+        raise RuntimeError(f"CoinGecko در دسترس نیست: {last_error}")
 
     lines = []
     for coin in data:
@@ -89,13 +107,30 @@ def fetch_crypto_data():
     return data, "\n".join(lines)
 
 
-# ---------- ۲. گرفتن نمودار از QuickChart ----------
+# ---------- ۲. نمودار با retry ----------
 def build_chart_url(coin_id: str) -> str:
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
     params = {"vs_currency": "usd", "days": "7"}
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    prices = r.json()["prices"]
+
+    last_error = None
+    prices = None
+    for attempt in range(4):
+        try:
+            r = requests.get(url, params=params, timeout=20)
+            if r.status_code == 429:
+                wait = 10 * (attempt + 1)
+                logger.warning("CoinGecko chart rate limit (429). Waiting %ds...", wait)
+                time.sleep(wait)
+                last_error = "rate limit"
+                continue
+            r.raise_for_status()
+            prices = r.json()["prices"]
+            break
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            time.sleep(5)
+    if prices is None:
+        raise RuntimeError(f"CoinGecko chart در دسترس نیست: {last_error}")
 
     step = max(1, len(prices) // 14)
     sampled = prices[::step][:14]
@@ -134,7 +169,7 @@ def build_chart_url(coin_id: str) -> str:
     )
 
 
-# ---------- ۳. تولید متن با Gemini ----------
+# ---------- ۳. متن با Gemini ----------
 def generate_post_text(market_summary: str) -> str:
     if not MODEL:
         return (
@@ -167,13 +202,16 @@ def generate_post_text(market_summary: str) -> str:
     return resp.text.strip()
 
 
-# ---------- ۴. ساخت و ارسال پست ----------
+# ---------- ۴. ساخت و ارسال ----------
 async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
     market_data, summary = fetch_crypto_data()
     logger.info("Market data fetched successfully.")
 
     post_text = generate_post_text(summary)
     logger.info("Post text generated. Length: %d chars", len(post_text))
+
+    # ⏳ تاخیر بین دو درخواست CoinGecko
+    time.sleep(8)
 
     chart_url = build_chart_url("bitcoin")
     img_resp = requests.get(chart_url, timeout=60)
@@ -233,7 +271,7 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️ شما اجازه این کار را ندارید.")
         return
-    await update.message.reply_text("⏳ در حال ساخت پست هوشمند... (۱۵–۳۰ ثانیه)")
+    await update.message.reply_text("⏳ در حال ساخت پست هوشمند... (۲۰–۴۰ ثانیه)")
     try:
         await build_and_send_post(context)
         await update.message.reply_text("✅ پست هوشمند با موفقیت منتشر شد.")
@@ -298,7 +336,6 @@ def main():
     if not GEMINI_API_KEY:
         logger.warning("⚠️ GEMINI_API_KEY تنظیم نشده — متن پیش‌فرض استفاده می‌شود.")
 
-    # اجرای وب‌سرور توی ترد جدا
     threading.Thread(target=run_web_server, daemon=True).start()
 
     if not ADMIN_ID:
