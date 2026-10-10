@@ -16,9 +16,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 HUGGINGFACE_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
-# تنظیمات Gemini با مدل جدید و فعال
+# تنظیمات Gemini با مدل جدید معرفی‌شده در خطا
 genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+gemini_model = genai.GenerativeModel('gemini-3.8-flash')
 
 # مدل ساخت عکس در Hugging Face
 HF_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
