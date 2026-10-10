@@ -25,6 +25,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 logging.getLogger("telegram.request").setLevel(logging.WARNING)
+logging.getLogger("google").setLevel(logging.WARNING)
 
 # ---------- متغیرهای محیطی ----------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -32,8 +33,8 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "@KriptoKlik").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 POST_INTERVAL_SECONDS = int(os.getenv("POST_INTERVAL_SECONDS", "21600"))
+AUTO_POST_ENABLED = os.getenv("AUTO_POST_ENABLED", "true").lower() == "true"
 
-# همیشه آخرین نسخه Flash — دیگه ۴۰۴ نمی‌ده
 GEMINI_MODEL = "gemini-flash-latest"
 GEMINI_CLIENT = None
 if GEMINI_API_KEY:
@@ -41,6 +42,9 @@ if GEMINI_API_KEY:
 
 AUTO_JOB_NAME = "auto_post"
 CAPTION_LIMIT = 1000
+
+# فلگ runtime که وضعیت فعلی رو نشون می‌ده
+auto_is_running = False
 
 
 def is_admin(update: Update) -> bool:
@@ -164,13 +168,14 @@ def build_chart_url(coin_id: str) -> str:
 
 # ---------- متن با Gemini ----------
 def generate_post_text(market_summary: str) -> str:
+    fallback = (
+        "🚀 وضعیت لحظه‌ای بازار کریپتو\n\n"
+        f"{market_summary}\n\n"
+        "🔔 برای تحلیل‌های روزانه ما رو دنبال کنید: @KriptoKlik\n"
+        "#کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری"
+    )
     if not GEMINI_CLIENT:
-        return (
-            "🚀 وضعیت لحظه‌ای بازار کریپتو\n\n"
-            f"{market_summary}\n\n"
-            "🔔 برای تحلیل‌های روزانه ما رو دنبال کنید: @KriptoKlik\n"
-            "#کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری"
-        )
+        return fallback
 
     prompt = f"""تو یک تولیدکننده محتوای فارسی برای یک کانال تلگرامی کریپتو به اسم «کریپتو کلیک» هستی.
 بر اساس داده‌های زیر یه پست جذاب، صمیمی و خودمونی بنویس.
@@ -199,13 +204,7 @@ def generate_post_text(market_summary: str) -> str:
         text = response.text.strip()
     except Exception as e:
         logger.error("Gemini error: %s: %s", type(e).__name__, str(e)[:300])
-        # Fallback: متن پیش‌فرض
-        text = (
-            "🚀 وضعیت لحظه‌ای بازار کریپتو\n\n"
-            f"{market_summary}\n\n"
-            "🔔 برای تحلیل‌های روزانه ما رو دنبال کنید: @KriptoKlik\n"
-            "#کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری"
-        )
+        return fallback
 
     if len(text) > CAPTION_LIMIT:
         logger.warning("Caption too long (%d). Truncating...", len(text))
@@ -236,8 +235,6 @@ async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
     photo.name = "chart.png"
 
     logger.info("STEP 5: sending to %s ...", TARGET_CHANNEL)
-
-    # تلاش ۱: با عکس
     try:
         await context.bot.send_photo(
             chat_id=TARGET_CHANNEL,
@@ -250,7 +247,6 @@ async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
         logger.error("send_photo failed: %s: %s", type(e).__name__, str(e))
         logger.warning("Falling back to text-only message...")
 
-    # تلاش ۲: فقط متن
     try:
         await context.bot.send_message(
             chat_id=TARGET_CHANNEL,
@@ -260,6 +256,35 @@ async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
     except TelegramError as e:
         logger.error("send_message also failed: %s: %s", type(e).__name__, str(e))
         raise
+
+
+# ---------- فعال‌سازی / غیرفعال‌سازی خودکار ----------
+def schedule_auto_job(app):
+    """تایمر ارسال خودکار رو با فاصله POST_INTERVAL_SECONDS تنظیم می‌کنه."""
+    global auto_is_running
+    job_queue = app.job_queue
+    for job in job_queue.get_jobs_by_name(AUTO_JOB_NAME):
+        job.schedule_removal()
+    job_queue.run_repeating(
+        auto_post_job,
+        interval=POST_INTERVAL_SECONDS,
+        first=POST_INTERVAL_SECONDS,
+        name=AUTO_JOB_NAME,
+    )
+    auto_is_running = True
+    logger.info(
+        "Auto-post scheduled every %d seconds (%.1f hours).",
+        POST_INTERVAL_SECONDS,
+        POST_INTERVAL_SECONDS / 3600,
+    )
+
+
+def cancel_auto_job(app):
+    global auto_is_running
+    for job in app.job_queue.get_jobs_by_name(AUTO_JOB_NAME):
+        job.schedule_removal()
+    auto_is_running = False
+    logger.info("Auto-post cancelled.")
 
 
 # ---------- دستورات ----------
@@ -280,25 +305,21 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️ شما اجازه این کار را ندارید.")
         return
+    jobs = context.job_queue.get_jobs_by_name(AUTO_JOB_NAME)
+    next_run = jobs[0].next_t.strftime("%Y-%m-%d %H:%M UTC") if jobs and jobs[0].next_t else "—"
     msg = (
         f"🔧 اطلاعات:\n\n"
         f"ADMIN_ID: {ADMIN_ID}\n"
         f"TARGET_CHANNEL: {repr(TARGET_CHANNEL)}\n"
         f"GEMINI_MODEL: {GEMINI_MODEL}\n"
         f"GEMINI: {'✅' if GEMINI_CLIENT else '❌'}\n"
+        f"POST_INTERVAL: {POST_INTERVAL_SECONDS}s ({POST_INTERVAL_SECONDS // 3600}h)\n"
+        f"AUTO_POST_ENABLED (env): {AUTO_POST_ENABLED}\n"
+        f"Auto running: {'🟢' if jobs else '🔴'}\n"
+        f"Next run: {next_run}\n"
         f"USER_ID: {update.effective_user.id}"
     )
     await update.message.reply_text(msg)
-
-    try:
-        chat = await context.bot.get_chat(TARGET_CHANNEL)
-        await update.message.reply_text(
-            f"✅ ربات به کانال دسترسی دارد:\n"
-            f"ID: {chat.id}\n"
-            f"Title: {chat.title}"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ خطا: {type(e).__name__}: {str(e)[:200]}")
 
 
 async def show_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -337,19 +358,12 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ خطا: {type(e).__name__}: {str(e)[:200]}")
 
 
-# ---------- زمان‌بند ----------
+# ---------- زمان‌بند (دستورات دستی) ----------
 async def auto_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️ شما اجازه این کار را ندارید.")
         return
-    for job in context.job_queue.get_jobs_by_name(AUTO_JOB_NAME):
-        job.schedule_removal()
-    context.job_queue.run_repeating(
-        auto_post_job,
-        interval=POST_INTERVAL_SECONDS,
-        first=POST_INTERVAL_SECONDS,
-        name=AUTO_JOB_NAME,
-    )
+    schedule_auto_job(context.application)
     await update.message.reply_text(
         f"✅ ارسال خودکار روشن شد. هر {POST_INTERVAL_SECONDS // 3600} ساعت."
     )
@@ -363,8 +377,7 @@ async def auto_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not jobs:
         await update.message.reply_text("ℹ️ از قبل خاموش بود.")
         return
-    for job in jobs:
-        job.schedule_removal()
+    cancel_auto_job(context.application)
     await update.message.reply_text("🛑 ارسال خودکار خاموش شد.")
 
 
@@ -372,7 +385,9 @@ async def auto_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     jobs = context.job_queue.get_jobs_by_name(AUTO_JOB_NAME)
     if jobs and jobs[0].next_t:
         nxt = jobs[0].next_t.strftime("%Y-%m-%d %H:%M UTC")
-        await update.message.reply_text(f"🟢 فعال — اجرای بعدی: {nxt}")
+        await update.message.reply_text(
+            f"🟢 فعال — اجرای بعدی: {nxt}\nفاصله: هر {POST_INTERVAL_SECONDS // 3600} ساعت."
+        )
     else:
         await update.message.reply_text("🔴 خاموش است.")
 
@@ -386,6 +401,15 @@ async def auto_post_job(context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Auto-post failed")
 
 
+# ---------- Post Init: بعد از راه‌اندازی، خودکار فعال کن ----------
+async def post_init(app):
+    if AUTO_POST_ENABLED:
+        schedule_auto_job(app)
+        logger.info("Auto-post auto-enabled from env (AUTO_POST_ENABLED=true).")
+    else:
+        logger.info("Auto-post disabled (AUTO_POST_ENABLED=false).")
+
+
 # ---------- راه‌اندازی ----------
 def main():
     if not TELEGRAM_TOKEN:
@@ -395,7 +419,13 @@ def main():
 
     threading.Thread(target=run_web_server, daemon=True).start()
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("debug", debug))
     app.add_handler(CommandHandler("show_channel", show_channel))
