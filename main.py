@@ -7,7 +7,8 @@ from io import BytesIO
 from urllib.parse import quote
 
 import requests
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from aiohttp import web
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -20,6 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# خاموش کردن لاگ‌های پرحجم که توکن رو لو می‌دن
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
@@ -33,12 +35,14 @@ TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "@KriptoKlik").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 POST_INTERVAL_SECONDS = int(os.getenv("POST_INTERVAL_SECONDS", "21600"))
 
+# مدل جدید Gemini 2.0 Flash
+GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_CLIENT = None
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-MODEL = genai.GenerativeModel("gemini-1.5-flash") if GEMINI_API_KEY else None
+    GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
 
 AUTO_JOB_NAME = "auto_post"
-CAPTION_LIMIT = 1000  # کمی کمتر از ۱۰۲۴ برای اطمینان
+CAPTION_LIMIT = 1000
 
 
 def is_admin(update: Update) -> bool:
@@ -160,15 +164,16 @@ def build_chart_url(coin_id: str) -> str:
     return f"https://quickchart.io/chart?c={encoded}&w=800&h=400&bg=0f0f0f&f=png"
 
 
-# ---------- متن ----------
+# ---------- متن با Gemini (SDK جدید) ----------
 def generate_post_text(market_summary: str) -> str:
-    if not MODEL:
+    if not GEMINI_CLIENT:
         return (
             "🚀 وضعیت لحظه‌ای بازار کریپتو\n\n"
             f"{market_summary}\n\n"
             "🔔 برای تحلیل‌های روزانه ما رو دنبال کنید: @KriptoKlik\n"
             "#کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری"
         )
+
     prompt = f"""تو یک تولیدکننده محتوای فارسی برای یک کانال تلگرامی کریپتو به اسم «کریپتو کلیک» هستی.
 بر اساس داده‌های زیر یه پست جذاب، صمیمی و خودمونی بنویس.
 
@@ -187,8 +192,12 @@ def generate_post_text(market_summary: str) -> str:
 #کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری
 
 فقط خود متن پست رو برگردون، هیچ توضیح اضافه‌ای نده. حتماً کمتر از ۸۰۰ کاراکتر باشه."""
-    resp = MODEL.generate_content(prompt)
-    text = resp.text.strip()
+
+    response = GEMINI_CLIENT.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+    )
+    text = response.text.strip()
     if len(text) > CAPTION_LIMIT:
         logger.warning("Caption too long (%d). Truncating...", len(text))
         text = text[:CAPTION_LIMIT - 3] + "..."
@@ -201,7 +210,7 @@ async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
     market_data, summary = fetch_crypto_data()
     logger.info("STEP 1 done.")
 
-    logger.info("STEP 2: generating text...")
+    logger.info("STEP 2: generating text with Gemini...")
     post_text = generate_post_text(summary)
     logger.info("STEP 2 done. Caption length: %d chars", len(post_text))
 
@@ -266,19 +275,21 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔧 اطلاعات:\n\n"
         f"ADMIN_ID: {ADMIN_ID}\n"
         f"TARGET_CHANNEL: {repr(TARGET_CHANNEL)}\n"
-        f"GEMINI: {'✅' if GEMINI_API_KEY else '❌'}\n"
+        f"GEMINI_MODEL: {GEMINI_MODEL}\n"
+        f"GEMINI: {'✅' if GEMINI_CLIENT else '❌'}\n"
         f"USER_ID: {update.effective_user.id}"
     )
     await update.message.reply_text(msg)
+
+    # چک کردن لیست مدل‌های موجود
     try:
-        chat = await context.bot.get_chat(TARGET_CHANNEL)
+        models = GEMINI_CLIENT.models.list()
+        model_names = [m.name for m in models]
         await update.message.reply_text(
-            f"✅ ربات به کانال دسترسی دارد:\n"
-            f"ID: {chat.id}\n"
-            f"Title: {chat.title}"
+            f"📋 مدل‌های موجود:\n" + "\n".join(model_names[:10])
         )
     except Exception as e:
-        await update.message.reply_text(f"❌ خطا: {type(e).__name__}: {str(e)[:200]}")
+        await update.message.reply_text(f"❌ خطا در لیست مدل‌ها: {str(e)[:200]}")
 
 
 async def show_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -370,7 +381,7 @@ async def auto_post_job(context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not TELEGRAM_TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN تنظیم نشده.")
-    if not GEMINI_API_KEY:
+    if not GEMINI_CLIENT:
         logger.warning("⚠️ GEMINI_API_KEY تنظیم نشده.")
 
     threading.Thread(target=run_web_server, daemon=True).start()
