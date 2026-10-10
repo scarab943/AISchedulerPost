@@ -1,4 +1,2 @@
-requests
-google-generativeai
-huggingface_hub
-python-telegram-bot
+python-telegram-bot[job-queue]==21.6
+requests==2.32.3
