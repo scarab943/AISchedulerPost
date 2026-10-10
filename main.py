@@ -18,6 +18,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# خاموش کردن لاگ‌های پرحجم که توکن رو لو می‌دن
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext").setLevel(logging.WARNING)
+
 # ---------- متغیرهای محیطی ----------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -25,8 +31,9 @@ TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "@KriptoKlik")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 POST_INTERVAL_SECONDS = int(os.getenv("POST_INTERVAL_SECONDS", "21600"))  # ۶ ساعت
 
-genai.configure(api_key=GEMINI_API_KEY)
-MODEL = genai.GenerativeModel("gemini-1.5-flash")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+MODEL = genai.GenerativeModel("gemini-1.5-flash") if GEMINI_API_KEY else None
 
 AUTO_JOB_NAME = "auto_post"
 
@@ -84,7 +91,6 @@ def fetch_crypto_data():
 
 # ---------- ۲. گرفتن نمودار از QuickChart ----------
 def build_chart_url(coin_id: str) -> str:
-    """قیمت ۷ روز اخیر رو می‌گیره و نمودار خطی QuickChart می‌سازه."""
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
     params = {"vs_currency": "usd", "days": "7"}
     r = requests.get(url, params=params, timeout=20)
@@ -130,6 +136,14 @@ def build_chart_url(coin_id: str) -> str:
 
 # ---------- ۳. تولید متن با Gemini ----------
 def generate_post_text(market_summary: str) -> str:
+    if not MODEL:
+        return (
+            "🚀 وضعیت لحظه‌ای بازار کریپتو\n\n"
+            f"{market_summary}\n\n"
+            "🔔 برای تحلیل‌های روزانه ما رو دنبال کنید: @KriptoKlik\n"
+            "#کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری"
+        )
+
     prompt = f"""تو یک تولیدکننده محتوای فارسی برای یک کانال تلگرامی کریپتو به اسم «کریپتو کلیک» هستی.
 وظیفه‌ت اینه که بر اساس داده‌های زیر یه پست جذاب، صمیمی و خودمونی بنویسی.
 
@@ -156,22 +170,29 @@ def generate_post_text(market_summary: str) -> str:
 # ---------- ۴. ساخت و ارسال پست ----------
 async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
     market_data, summary = fetch_crypto_data()
-    logger.info("Market data fetched: %s", summary.replace("\n", " | "))
+    logger.info("Market data fetched successfully.")
 
     post_text = generate_post_text(summary)
+    logger.info("Post text generated. Length: %d chars", len(post_text))
 
     chart_url = build_chart_url("bitcoin")
     img_resp = requests.get(chart_url, timeout=60)
     img_resp.raise_for_status()
+    logger.info("Chart downloaded. Size: %d bytes", len(img_resp.content))
 
     photo = BytesIO(img_resp.content)
     photo.name = "chart.png"
 
-    await context.bot.send_photo(
-        chat_id=TARGET_CHANNEL,
-        photo=photo,
-        caption=post_text,
-    )
+    try:
+        await context.bot.send_photo(
+            chat_id=TARGET_CHANNEL,
+            photo=photo,
+            caption=post_text,
+        )
+        logger.info("Photo sent successfully to %s", TARGET_CHANNEL)
+    except Exception as e:
+        logger.exception("send_photo failed: %s", e)
+        raise
 
 
 # ---------- دستورات ----------
@@ -218,7 +239,7 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ پست هوشمند با موفقیت منتشر شد.")
     except Exception as e:
         logger.exception("Error in generate_post")
-        await update.message.reply_text(f"❌ خطا: {type(e).__name__}")
+        await update.message.reply_text(f"❌ خطا: {type(e).__name__}: {str(e)[:200]}")
 
 
 # ---------- زمان‌بند ----------
@@ -275,7 +296,7 @@ def main():
     if not TELEGRAM_TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN تنظیم نشده.")
     if not GEMINI_API_KEY:
-        raise SystemExit("GEMINI_API_KEY تنظیم نشده.")
+        logger.warning("⚠️ GEMINI_API_KEY تنظیم نشده — متن پیش‌فرض استفاده می‌شود.")
 
     # اجرای وب‌سرور توی ترد جدا
     threading.Thread(target=run_web_server, daemon=True).start()
