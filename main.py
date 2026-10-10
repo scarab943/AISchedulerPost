@@ -1,11 +1,13 @@
 import os
 import json
 import logging
+import threading
 from io import BytesIO
 from urllib.parse import quote
 
 import requests
 import google.generativeai as genai
+from aiohttp import web
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
@@ -31,6 +33,20 @@ AUTO_JOB_NAME = "auto_post"
 
 def is_admin(update: Update) -> bool:
     return bool(update.effective_user) and update.effective_user.id == ADMIN_ID
+
+
+# ---------- وب‌سرور کوچیک برای UptimeRobot ----------
+async def health(request):
+    return web.Response(text="OK")
+
+
+def run_web_server():
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    port = int(os.getenv("PORT", "8080"))
+    logger.info("Web server starting on port %s", port)
+    web.run_app(app, host="0.0.0.0", port=port, print=None)
 
 
 # ---------- ۱. گرفتن قیمت لحظه‌ای ----------
@@ -75,7 +91,6 @@ def build_chart_url(coin_id: str) -> str:
     r.raise_for_status()
     prices = r.json()["prices"]
 
-    # فقط هر ۱۲ ساعت یه نقطه (روزی ۲ نقطه → ۱۴ نقطه)
     step = max(1, len(prices) // 14)
     sampled = prices[::step][:14]
 
@@ -140,19 +155,15 @@ def generate_post_text(market_summary: str) -> str:
 
 # ---------- ۴. ساخت و ارسال پست ----------
 async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
-    # ۱) داده بازار
     market_data, summary = fetch_crypto_data()
     logger.info("Market data fetched: %s", summary.replace("\n", " | "))
 
-    # ۲) متن پست از Gemini
     post_text = generate_post_text(summary)
 
-    # ۳) نمودار بیت‌کوین
     chart_url = build_chart_url("bitcoin")
     img_resp = requests.get(chart_url, timeout=60)
     img_resp.raise_for_status()
 
-    # ۴) ارسال به کانال
     photo = BytesIO(img_resp.content)
     photo.name = "chart.png"
 
@@ -160,7 +171,6 @@ async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
         chat_id=TARGET_CHANNEL,
         photo=photo,
         caption=post_text,
-        parse_mode=ParseMode.HTML if "<" in post_text else None,
     )
 
 
@@ -266,6 +276,10 @@ def main():
         raise SystemExit("TELEGRAM_BOT_TOKEN تنظیم نشده.")
     if not GEMINI_API_KEY:
         raise SystemExit("GEMINI_API_KEY تنظیم نشده.")
+
+    # اجرای وب‌سرور توی ترد جدا
+    threading.Thread(target=run_web_server, daemon=True).start()
+
     if not ADMIN_ID:
         logger.warning("⚠️ ADMIN_ID تنظیم نشده.")
 
