@@ -8,11 +8,9 @@ from urllib.parse import quote
 
 import requests
 from google import genai
-from google.genai import types
 from aiohttp import web
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 logging.basicConfig(
@@ -35,8 +33,8 @@ TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "@KriptoKlik").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 POST_INTERVAL_SECONDS = int(os.getenv("POST_INTERVAL_SECONDS", "21600"))
 
-# مدل جدید Gemini 2.0 Flash
-GEMINI_MODEL = "gemini-2.0-flash"
+# همیشه آخرین نسخه Flash — دیگه ۴۰۴ نمی‌ده
+GEMINI_MODEL = "gemini-flash-latest"
 GEMINI_CLIENT = None
 if GEMINI_API_KEY:
     GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
@@ -164,7 +162,7 @@ def build_chart_url(coin_id: str) -> str:
     return f"https://quickchart.io/chart?c={encoded}&w=800&h=400&bg=0f0f0f&f=png"
 
 
-# ---------- متن با Gemini (SDK جدید) ----------
+# ---------- متن با Gemini ----------
 def generate_post_text(market_summary: str) -> str:
     if not GEMINI_CLIENT:
         return (
@@ -193,11 +191,22 @@ def generate_post_text(market_summary: str) -> str:
 
 فقط خود متن پست رو برگردون، هیچ توضیح اضافه‌ای نده. حتماً کمتر از ۸۰۰ کاراکتر باشه."""
 
-    response = GEMINI_CLIENT.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-    )
-    text = response.text.strip()
+    try:
+        response = GEMINI_CLIENT.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+        )
+        text = response.text.strip()
+    except Exception as e:
+        logger.error("Gemini error: %s: %s", type(e).__name__, str(e)[:300])
+        # Fallback: متن پیش‌فرض
+        text = (
+            "🚀 وضعیت لحظه‌ای بازار کریپتو\n\n"
+            f"{market_summary}\n\n"
+            "🔔 برای تحلیل‌های روزانه ما رو دنبال کنید: @KriptoKlik\n"
+            "#کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری"
+        )
+
     if len(text) > CAPTION_LIMIT:
         logger.warning("Caption too long (%d). Truncating...", len(text))
         text = text[:CAPTION_LIMIT - 3] + "..."
@@ -281,15 +290,15 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
-    # چک کردن لیست مدل‌های موجود
     try:
-        models = GEMINI_CLIENT.models.list()
-        model_names = [m.name for m in models]
+        chat = await context.bot.get_chat(TARGET_CHANNEL)
         await update.message.reply_text(
-            f"📋 مدل‌های موجود:\n" + "\n".join(model_names[:10])
+            f"✅ ربات به کانال دسترسی دارد:\n"
+            f"ID: {chat.id}\n"
+            f"Title: {chat.title}"
         )
     except Exception as e:
-        await update.message.reply_text(f"❌ خطا در لیست مدل‌ها: {str(e)[:200]}")
+        await update.message.reply_text(f"❌ خطا: {type(e).__name__}: {str(e)[:200]}")
 
 
 async def show_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
