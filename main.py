@@ -1,10 +1,9 @@
 import os
 import logging
-import io
+import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import google.generativeai as genai
-from huggingface_hub import InferenceClient
 
 # تنظیمات لاگ‌گیری
 logging.basicConfig(
@@ -12,19 +11,15 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# خواندن کلیدها از متغیرهای محیطی Railway
+# خواندن کلیدهای ضروری از متغیرهای محیطی Railway
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-HUGGINGFACE_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
-# تنظیمات Gemini
+# تنظیمات Gemini با مدل فعال
 genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-3.8-flash')
 
-# راه‌اندازی کلاینت استاندارد Hugging Face
-hf_client = InferenceClient(token=HUGGINGFACE_KEY)
-
-# متغیر برای ذخیره آدرس کانال
+# متغیر پیش‌فرض برای آدرس کانال
 TARGET_CHANNEL = "@your_channel_username"
 
 async def set_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -44,25 +39,25 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = gemini_model.generate_content(prompt_text)
         post_text = response.text
 
-        # ۲. تولید تصویر با کتابخانه رسمی Hugging Face
+        # ۲. تولید تصویر با سرویس رایگان و بدون نیاز به توکن
         image_prompt = "A modern futuristic workspace, high quality, digital art"
-        image = hf_client.text_to_image(
-            image_prompt,
-            model="stabilityai/stable-diffusion-xl-base-1.0"
-        )
+        encoded_prompt = requests.utils.quote(image_prompt)
+        image_url = f"https://pollinations.ai/p/{encoded_prompt}"
         
-        # تبدیل تصویر PIL به بایت برای ارسال در تلگرام
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format='JPEG')
-        image_bytes = img_byte_arr.getvalue()
+        img_response = requests.get(image_url)
         
-        # ۳. ارسال عکس و متن به کانال تلگرام
-        await context.bot.send_photo(
-            chat_id=TARGET_CHANNEL,
-            photo=image_bytes,
-            caption=post_text
-        )
-        await update.message.reply_text("پست با موفقیت در کانال منتشر شد!")
+        if img_response.status_code == 200:
+            image_bytes = img_response.content
+            
+            # ۳. ارسال عکس و متن به کانال تلگرام
+            await context.bot.send_photo(
+                chat_id=TARGET_CHANNEL,
+                photo=image_bytes,
+                caption=post_text
+            )
+            await update.message.reply_text("پست با موفقیت در کانال منتشر شد!")
+        else:
+            await update.message.reply_text("خطا در دریافت تصویر از سرور.")
 
     except Exception as e:
         await update.message.reply_text(f"خطایی رخ داد: {str(e)}")
