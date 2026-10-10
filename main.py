@@ -20,18 +20,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ⛔ خاموش کردن لاگ‌های پرحجم که توکن رو لو می‌دن
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 logging.getLogger("telegram.request").setLevel(logging.WARNING)
-logging.getLogger("telegram.Bot").setLevel(logging.WARNING)
 
 # ---------- متغیرهای محیطی ----------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "@KriptoKlik")
+TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "@KriptoKlik").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 POST_INTERVAL_SECONDS = int(os.getenv("POST_INTERVAL_SECONDS", "21600"))
 
@@ -40,6 +38,7 @@ if GEMINI_API_KEY:
 MODEL = genai.GenerativeModel("gemini-1.5-flash") if GEMINI_API_KEY else None
 
 AUTO_JOB_NAME = "auto_post"
+CAPTION_LIMIT = 1000  # کمی کمتر از ۱۰۲۴ برای اطمینان
 
 
 def is_admin(update: Update) -> bool:
@@ -60,7 +59,7 @@ def run_web_server():
     web.run_app(app, host="0.0.0.0", port=port, print=None)
 
 
-# ---------- ۱. قیمت لحظه‌ای ----------
+# ---------- قیمت ----------
 def fetch_crypto_data():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {
@@ -70,7 +69,6 @@ def fetch_crypto_data():
         "sparkline": "false",
         "price_change_percentage": "24h,7d",
     }
-
     last_error = None
     data = None
     for attempt in range(4):
@@ -78,7 +76,7 @@ def fetch_crypto_data():
             r = requests.get(url, params=params, timeout=20)
             if r.status_code == 429:
                 wait = 10 * (attempt + 1)
-                logger.warning("CoinGecko rate limit (429). Waiting %ds...", wait)
+                logger.warning("CoinGecko 429. Waiting %ds...", wait)
                 time.sleep(wait)
                 last_error = "rate limit"
                 continue
@@ -89,7 +87,7 @@ def fetch_crypto_data():
             last_error = e
             time.sleep(5)
     if data is None:
-        raise RuntimeError(f"CoinGecko در دسترس نیست: {last_error}")
+        raise RuntimeError(f"CoinGecko error: {last_error}")
 
     lines = []
     for coin in data:
@@ -102,26 +100,23 @@ def fetch_crypto_data():
         arrow_7 = "🔺" if change_7d >= 0 else "🔻"
         lines.append(
             f"• {name} ({symbol}): ${price:,.0f} | "
-            f"۲۴ ساعت: {arrow_24} {change_24h:+.2f}% | "
-            f"۷ روز: {arrow_7} {change_7d:+.2f}%"
+            f"۲۴س: {arrow_24} {change_24h:+.2f}% | "
+            f"۷ر: {arrow_7} {change_7d:+.2f}%"
         )
     return data, "\n".join(lines)
 
 
-# ---------- ۲. نمودار ----------
+# ---------- نمودار ----------
 def build_chart_url(coin_id: str) -> str:
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
     params = {"vs_currency": "usd", "days": "7"}
-
     last_error = None
     prices = None
     for attempt in range(4):
         try:
             r = requests.get(url, params=params, timeout=20)
             if r.status_code == 429:
-                wait = 10 * (attempt + 1)
-                logger.warning("CoinGecko chart rate limit (429). Waiting %ds...", wait)
-                time.sleep(wait)
+                time.sleep(10 * (attempt + 1))
                 last_error = "rate limit"
                 continue
             r.raise_for_status()
@@ -131,11 +126,10 @@ def build_chart_url(coin_id: str) -> str:
             last_error = e
             time.sleep(5)
     if prices is None:
-        raise RuntimeError(f"CoinGecko chart در دسترس نیست: {last_error}")
+        raise RuntimeError(f"CoinGecko chart error: {last_error}")
 
     step = max(1, len(prices) // 14)
     sampled = prices[::step][:14]
-
     labels = [f"{i+1}" for i in range(len(sampled))]
     data_points = [round(p[1], 2) for p in sampled]
     color = "#f7931a" if coin_id == "bitcoin" else "#627eea"
@@ -162,12 +156,11 @@ def build_chart_url(coin_id: str) -> str:
             }
         }
     }
-
     encoded = quote(json.dumps(chart_config), safe="")
     return f"https://quickchart.io/chart?c={encoded}&w=800&h=400&bg=0f0f0f&f=png"
 
 
-# ---------- ۳. متن با Gemini ----------
+# ---------- متن ----------
 def generate_post_text(market_summary: str) -> str:
     if not MODEL:
         return (
@@ -177,62 +170,77 @@ def generate_post_text(market_summary: str) -> str:
             "#کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری"
         )
     prompt = f"""تو یک تولیدکننده محتوای فارسی برای یک کانال تلگرامی کریپتو به اسم «کریپتو کلیک» هستی.
-وظیفه‌ت اینه که بر اساس داده‌های زیر یه پست جذاب، صمیمی و خودمونی بنویسی.
+بر اساس داده‌های زیر یه پست جذاب، صمیمی و خودمونی بنویس.
 
 داده‌های بازار:
 {market_summary}
 
-شرایط پست:
-- لحن: صمیمی و خودمونی، مثل یه دوست که داره تحلیل می‌کنه
-- فارسی روان، بدون کلمه‌های انگلیسی اضافه
+شرایط:
+- لحن صمیمی و خودمونی
+- فارسی روان
 - شروع با یه جمله‌ی قلاب‌دار
-- ۱ تا ۲ جمله تحلیل کوتاه از وضعیت
-- حداقل ۵ تا ۸ ایموجی مرتبط در کل متن
-- حتماً این هشتگ‌ها آخرش باشه: #کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری
-- حتماً این CTA آخرش باشه: «🔔 برای تحلیل‌های روزانه ما رو دنبال کنید: @KriptoKlik»
-- کل متن بین ۳ تا ۵ خط باشه (کوتاه و خوانا)
-- از Markdown یا کاراکترهای عجیب استفاده نکن
+- ۱ تا ۲ جمله تحلیل کوتاه
+- ۵ تا ۸ ایموجی
+- بین ۳ تا ۵ خط (کوتاه!)
+- آخرش حتماً اینا باشه:
+🔔 برای تحلیل‌های روزانه ما رو دنبال کنید: @KriptoKlik
+#کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری
 
-فقط خود متن پست رو برگردون، هیچ توضیح اضافه‌ای نده."""
+فقط خود متن پست رو برگردون، هیچ توضیح اضافه‌ای نده. حتماً کمتر از ۸۰۰ کاراکتر باشه."""
     resp = MODEL.generate_content(prompt)
-    return resp.text.strip()
+    text = resp.text.strip()
+    if len(text) > CAPTION_LIMIT:
+        logger.warning("Caption too long (%d). Truncating...", len(text))
+        text = text[:CAPTION_LIMIT - 3] + "..."
+    return text
 
 
-# ---------- ۴. ساخت و ارسال ----------
+# ---------- ساخت و ارسال ----------
 async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
     logger.info("STEP 1: fetching market data...")
     market_data, summary = fetch_crypto_data()
-    logger.info("STEP 1 done. Summary: %s", summary.replace("\n", " | "))
+    logger.info("STEP 1 done.")
 
     logger.info("STEP 2: generating text...")
     post_text = generate_post_text(summary)
-    logger.info("STEP 2 done. Length: %d", len(post_text))
+    logger.info("STEP 2 done. Caption length: %d chars", len(post_text))
 
-    logger.info("STEP 3: waiting 8s before chart...")
+    logger.info("STEP 3: waiting 8s...")
     time.sleep(8)
 
     logger.info("STEP 4: fetching chart...")
     chart_url = build_chart_url("bitcoin")
     img_resp = requests.get(chart_url, timeout=60)
     img_resp.raise_for_status()
-    logger.info("STEP 4 done. Size: %d", len(img_resp.content))
+    logger.info("STEP 4 done. Size: %d bytes", len(img_resp.content))
 
     photo = BytesIO(img_resp.content)
     photo.name = "chart.png"
 
     logger.info("STEP 5: sending to %s ...", TARGET_CHANNEL)
+
+    # تلاش ۱: با عکس
     try:
         await context.bot.send_photo(
             chat_id=TARGET_CHANNEL,
             photo=photo,
             caption=post_text,
         )
-        logger.info("STEP 5 done. Photo sent to %s", TARGET_CHANNEL)
+        logger.info("STEP 5 done. Photo sent successfully.")
+        return
     except TelegramError as e:
-        logger.error("TELEGRAM ERROR: %s: %s", type(e).__name__, str(e))
-        raise
-    except Exception as e:
-        logger.exception("UNKNOWN ERROR in send_photo")
+        logger.error("send_photo failed: %s: %s", type(e).__name__, str(e))
+        logger.warning("Falling back to text-only message...")
+
+    # تلاش ۲: فقط متن
+    try:
+        await context.bot.send_message(
+            chat_id=TARGET_CHANNEL,
+            text=post_text,
+        )
+        logger.info("Fallback text sent successfully.")
+    except TelegramError as e:
+        logger.error("send_message also failed: %s: %s", type(e).__name__, str(e))
         raise
 
 
@@ -240,10 +248,9 @@ async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام! 👋\n\n"
-        "دستورات:\n"
-        "/generate_post — ارسال فوری پست هوشمند\n"
-        "/set_channel @name — تغییر کانال مقصد\n"
-        "/show_channel — نمایش کانال فعلی\n"
+        "/generate_post — ارسال فوری پست\n"
+        "/set_channel @name — تغییر کانال\n"
+        "/show_channel — نمایش کانال\n"
         "/debug — اطلاعات عیب‌یابی\n"
         "/auto_on — روشن کردن ارسال خودکار\n"
         "/auto_off — خاموش کردن\n"
@@ -256,29 +263,22 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔️ شما اجازه این کار را ندارید.")
         return
     msg = (
-        f"🔧 اطلاعات عیب‌یابی:\n\n"
+        f"🔧 اطلاعات:\n\n"
         f"ADMIN_ID: {ADMIN_ID}\n"
-        f"TARGET_CHANNEL: {TARGET_CHANNEL}\n"
-        f"TOKEN (first 10): {TELEGRAM_TOKEN[:10]}...\n"
+        f"TARGET_CHANNEL: {repr(TARGET_CHANNEL)}\n"
         f"GEMINI: {'✅' if GEMINI_API_KEY else '❌'}\n"
         f"USER_ID: {update.effective_user.id}"
     )
     await update.message.reply_text(msg)
-
-    # چک کردن دسترسی ربات به کانال
     try:
         chat = await context.bot.get_chat(TARGET_CHANNEL)
         await update.message.reply_text(
             f"✅ ربات به کانال دسترسی دارد:\n"
             f"ID: {chat.id}\n"
-            f"Title: {chat.title}\n"
-            f"Type: {chat.type}"
+            f"Title: {chat.title}"
         )
     except Exception as e:
-        await update.message.reply_text(
-            f"❌ ربات به کانال دسترسی ندارد:\n"
-            f"{type(e).__name__}: {str(e)[:200]}"
-        )
+        await update.message.reply_text(f"❌ خطا: {type(e).__name__}: {str(e)[:200]}")
 
 
 async def show_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -295,7 +295,7 @@ async def set_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     channel = context.args[0].strip()
     if not (channel.startswith("@") or channel.startswith("-100")):
-        await update.message.reply_text("❌ فرمت کانال نامعتبر است.")
+        await update.message.reply_text("❌ فرمت نامعتبر.")
         return
     TARGET_CHANNEL = channel
     await update.message.reply_text(f"✅ کانال به {TARGET_CHANNEL} تغییر یافت.")
@@ -308,7 +308,7 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ در حال ساخت پست هوشمند...")
     try:
         await build_and_send_post(context)
-        await update.message.reply_text("✅ پست هوشمند با موفقیت منتشر شد.")
+        await update.message.reply_text("✅ پست با موفقیت منتشر شد.")
     except TelegramError as e:
         logger.exception("Telegram error")
         await update.message.reply_text(f"❌ خطای تلگرام: {type(e).__name__}: {str(e)[:200]}")
@@ -358,10 +358,10 @@ async def auto_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def auto_post_job(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("Auto-post job running...")
+    logger.info("Auto-post running...")
     try:
         await build_and_send_post(context)
-        logger.info("Auto-post sent.")
+        logger.info("Auto-post done.")
     except Exception:
         logger.exception("Auto-post failed")
 
@@ -374,9 +374,6 @@ def main():
         logger.warning("⚠️ GEMINI_API_KEY تنظیم نشده.")
 
     threading.Thread(target=run_web_server, daemon=True).start()
-
-    if not ADMIN_ID:
-        logger.warning("⚠️ ADMIN_ID تنظیم نشده.")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
