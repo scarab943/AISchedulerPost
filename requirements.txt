@@ -1,0 +1,4 @@
+requests
+google-generativeai
+huggingface_hub
+python-telegram-bot
