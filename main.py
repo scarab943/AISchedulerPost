@@ -39,7 +39,7 @@ POST_INTERVAL_SECONDS = int(os.getenv("POST_INTERVAL_SECONDS", "21600"))
 AUTO_POST_ENABLED = os.getenv("AUTO_POST_ENABLED", "true").lower() == "true"
 AUTO_VIDEO_ENABLED = os.getenv("AUTO_VIDEO_ENABLED", "false").lower() == "true"
 AUTO_VIDEO_INTERVAL = int(os.getenv("AUTO_VIDEO_INTERVAL", "86400"))
-PROXY_URL = os.getenv("PROXY_URL", "").strip() # مثال: http://user:pass@host:port
+PROXY_URL = os.getenv("PROXY_URL", "").strip()
 
 GEMINI_MODEL = "gemini-flash-latest"
 GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
@@ -50,14 +50,17 @@ AUTO_JOB_NAME = "auto_post"
 AUTO_VIDEO_JOB_NAME = "auto_video"
 CAPTION_LIMIT = 1000
 
+
 def is_admin(update: Update) -> bool:
     return bool(update.effective_user) and update.effective_user.id == ADMIN_ID
+
 
 # ============================================================
 # بخش ۲: وب‌سرور
 # ============================================================
 async def health(request):
     return web.Response(text="OK")
+
 
 def run_web_server():
     app = web.Application()
@@ -66,6 +69,7 @@ def run_web_server():
     port = int(os.getenv("PORT", "8080"))
     logger.info("Web server starting on port %s", port)
     web.run_app(app, host="0.0.0.0", port=port, print=None)
+
 
 # ============================================================
 # بخش ۳: CoinGecko
@@ -112,6 +116,7 @@ def fetch_crypto_data():
             f"۷ر: {arrow_7} {change_7d:+.2f}%"
         )
     return data, "\n".join(lines)
+
 
 def build_chart_url(coin_id: str) -> str:
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
@@ -165,8 +170,9 @@ def build_chart_url(coin_id: str) -> str:
     encoded = quote(json.dumps(chart_config), safe="")
     return f"https://quickchart.io/chart?c={encoded}&w=800&h=400&bg=0f0f0f&f=png"
 
+
 # ============================================================
-# بخش ۴: Gemini (تولید متن)
+# بخش ۴: Gemini
 # ============================================================
 def generate_post_text(market_summary: str) -> str:
     fallback = (
@@ -211,6 +217,7 @@ def generate_post_text(market_summary: str) -> str:
         text = text[:CAPTION_LIMIT - 3] + "..."
     return text
 
+
 def generate_video_script(market_summary: str) -> dict:
     fallback = {
         "title": "تحلیل سریع بازار کریپتو",
@@ -232,7 +239,7 @@ def generate_video_script(market_summary: str) -> dict:
         return fallback
 
     prompt = f"""تو یه تولیدکننده محتوای فارسی برای یه کانال یوتیوب کریپتو هستی.
-بر اساس داده‌های زیر یه اسکریپت کوتاه برای یه ویدیوی ۴۵ ثانیه‌ای بنویس.
+بر اساس داده‌های زیر یه اسکریپت کوتاه برای یه ویدیوی ۳۰ ثانیه‌ای بنویس.
 
 داده‌های بازار:
 {market_summary}
@@ -240,7 +247,7 @@ def generate_video_script(market_summary: str) -> dict:
 خروجی رو دقیقاً به این فرمت JSON بده (فقط JSON، هیچ متن اضافه‌ای):
 {{
   "title": "یه عنوان جذاب فارسی برای ویدیو (حداکثر ۸ کلمه)",
-  "script": "متن گفتاری ویدیو. صمیمی و خودمونی. ۹۰ تا ۱۲۰ کلمه. با سلام و یه سوال از مخاطب شروع کن. دقیقاً همون چیزی که گوینده می‌خونه بخونه.",
+  "script": "متن گفتاری ویدیو. صمیمی و خودمونی. ۶۰ تا ۸۰ کلمه. با سلام و یه سوال از مخاطب شروع کن.",
   "youtube_title": "عنوان یوتیوب (با ایموجی، حداکثر ۷۰ کاراکتر)",
   "youtube_description": "توضیحات یوتیوب با هشتگ و CTA به کانال تلگرام @KriptoKlik",
   "youtube_tags": ["تگ۱", "تگ۲", "تگ۳", "تگ۴", "تگ۵"]
@@ -268,53 +275,61 @@ def generate_video_script(market_summary: str) -> dict:
         logger.error("Script generation error: %s: %s", type(e).__name__, str(e)[:300])
         return fallback
 
+
 # ============================================================
-# بخش ۵: تولید TTS با edge-tts (به‌روزرسانی‌شده)
+# بخش ۵: TTS با edge-tts
 # ============================================================
 async def generate_tts(text: str, output_path: str):
-    """متن رو به صدای فارسی تبدیل می‌کنه و از پروکسی (در صورت وجود) استفاده می‌کنه."""
     logger.info("Generating TTS... (Proxy: %s)", PROXY_URL or "disabled")
     communicate = edge_tts.Communicate(text, PERSIAN_VOICE, proxy=PROXY_URL or None)
     await communicate.save(output_path)
     logger.info("TTS saved to %s", output_path)
 
+
 # ============================================================
-# بخش ۶: گرفتن تصویر پس‌زمینه
+# بخش ۶: تصویر پس‌زمینه
 # ============================================================
 def fetch_background_image(prompt: str, output_path: str):
     encoded = quote(prompt, safe="")
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&nologo=true&seed={int(time.time())}"
+    url = f"https://image.pollinations.ai/prompt/{encoded}?width=720&height=1280&nologo=true&seed={int(time.time())}"
     r = requests.get(url, timeout=90)
     r.raise_for_status()
     with open(output_path, "wb") as f:
         f.write(r.content)
     logger.info("Background image saved (%d bytes)", len(r.content))
 
+
 # ============================================================
-# بخش ۷: ساخت ویدیو با FFmpeg
+# بخش ۷: ساخت ویدیو با FFmpeg (low-memory)
 # ============================================================
 def build_video(image_path: str, audio_path: str, output_path: str):
     cmd = [
         "ffmpeg", "-y",
         "-loop", "1",
+        "-framerate", "2",
         "-i", image_path,
         "-i", audio_path,
         "-c:v", "libx264",
+        "-preset", "ultrafast",
         "-tune", "stillimage",
+        "-crf", "30",
+        "-threads", "1",
         "-c:a", "aac",
-        "-b:a", "192k",
+        "-b:a", "128k",
         "-pix_fmt", "yuv420p",
         "-shortest",
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
-        "-r", "30",
+        "-vf", "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2",
+        "-r", "24",
+        "-movflags", "+faststart",
         output_path,
     ]
-    logger.info("Running FFmpeg...")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    logger.info("Running FFmpeg (low-memory mode)...")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
-        logger.error("FFmpeg stderr: %s", result.stderr[-500:])
+        logger.error("FFmpeg stderr (last 800 chars): %s", result.stderr[-800:])
         raise RuntimeError(f"FFmpeg failed: {result.returncode}")
     logger.info("Video built: %s", output_path)
+
 
 # ============================================================
 # بخش ۸: ساخت کامل ویدیو
@@ -358,8 +373,9 @@ async def create_video(market_summary: str) -> dict:
         "script": script_data["script"],
     }
 
+
 # ============================================================
-# بخش ۹: ارسال پست متنی (با نمودار)
+# بخش ۹: پست متنی
 # ============================================================
 async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
     logger.info("POST STEP 1: fetching market data...")
@@ -391,8 +407,9 @@ async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
         logger.error("send_photo failed: %s", e)
         await context.bot.send_message(chat_id=TARGET_CHANNEL, text=post_text)
 
+
 # ============================================================
-# بخش ۱۰: ساخت ویدیو و ارسال به DM ادمین
+# بخش ۱۰: ویدیو به DM ادمین
 # ============================================================
 async def build_and_send_video_to_admin(context: ContextTypes.DEFAULT_TYPE):
     logger.info("VIDEO STEP 1: fetching market data...")
@@ -438,8 +455,9 @@ async def build_and_send_video_to_admin(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
+
 # ============================================================
-# بخش ۱۱: پست تبلیغاتی ویدیو در کانال
+# بخش ۱۱: پست تبلیغاتی ویدیو
 # ============================================================
 async def set_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
@@ -522,6 +540,7 @@ async def set_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Error in set_youtube_link")
         await update.message.reply_text(f"❌ خطا: {type(e).__name__}: {str(e)[:200]}")
 
+
 # ============================================================
 # بخش ۱۲: زمان‌بند
 # ============================================================
@@ -533,6 +552,7 @@ def schedule_auto_job(app):
                      first=POST_INTERVAL_SECONDS, name=AUTO_JOB_NAME)
     logger.info("Auto-post scheduled every %ds.", POST_INTERVAL_SECONDS)
 
+
 def schedule_auto_video_job(app):
     jq = app.job_queue
     for job in jq.get_jobs_by_name(AUTO_VIDEO_JOB_NAME):
@@ -540,6 +560,7 @@ def schedule_auto_video_job(app):
     jq.run_repeating(auto_video_job, interval=AUTO_VIDEO_INTERVAL,
                      first=AUTO_VIDEO_INTERVAL, name=AUTO_VIDEO_JOB_NAME)
     logger.info("Auto-video scheduled every %ds.", AUTO_VIDEO_INTERVAL)
+
 
 async def auto_post_job(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Auto-post running...")
@@ -549,6 +570,7 @@ async def auto_post_job(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("Auto-post failed")
 
+
 async def auto_video_job(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Auto-video running...")
     try:
@@ -556,6 +578,7 @@ async def auto_video_job(context: ContextTypes.DEFAULT_TYPE):
         logger.info("Auto-video done.")
     except Exception:
         logger.exception("Auto-video failed")
+
 
 # ============================================================
 # بخش ۱۳: دستورات
@@ -572,6 +595,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/auto_on | /auto_off | /auto_status\n"
         "/auto_video_on | /auto_video_off"
     )
+
 
 async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
@@ -603,8 +627,10 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
+
 async def show_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"کانال فعلی: {TARGET_CHANNEL}")
+
 
 async def set_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global TARGET_CHANNEL
@@ -621,6 +647,7 @@ async def set_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     TARGET_CHANNEL = channel
     await update.message.reply_text(f"✅ کانال به {TARGET_CHANNEL} تغییر یافت.")
 
+
 async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️")
@@ -632,6 +659,7 @@ async def generate_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.exception("Error generate_post")
         await update.message.reply_text(f"❌ {type(e).__name__}: {str(e)[:200]}")
+
 
 async def generate_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
@@ -651,6 +679,7 @@ async def generate_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Error generate_video")
         await update.message.reply_text(f"❌ {type(e).__name__}: {str(e)[:200]}")
 
+
 # ============================================================
 # بخش ۱۴: auto commands
 # ============================================================
@@ -663,6 +692,7 @@ async def auto_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ پست خودکار روشن شد. هر {POST_INTERVAL_SECONDS // 3600} ساعت."
     )
 
+
 async def auto_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️")
@@ -670,6 +700,7 @@ async def auto_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for job in context.job_queue.get_jobs_by_name(AUTO_JOB_NAME):
         job.schedule_removal()
     await update.message.reply_text("🛑 پست خودکار خاموش شد.")
+
 
 async def auto_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     jobs = context.job_queue.get_jobs_by_name(AUTO_JOB_NAME)
@@ -685,6 +716,7 @@ async def auto_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt += "🎬 ویدیو خاموش"
     await update.message.reply_text(txt)
 
+
 async def auto_video_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️")
@@ -694,6 +726,7 @@ async def auto_video_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ ساخت خودکار ویدیو روشن شد. هر {AUTO_VIDEO_INTERVAL // 3600} ساعت."
     )
 
+
 async def auto_video_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️")
@@ -701,6 +734,7 @@ async def auto_video_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for job in context.job_queue.get_jobs_by_name(AUTO_VIDEO_JOB_NAME):
         job.schedule_removal()
     await update.message.reply_text("🛑 ساخت خودکار ویدیو خاموش شد.")
+
 
 # ============================================================
 # بخش ۱۵: راه‌اندازی
@@ -710,6 +744,7 @@ async def post_init(app):
         schedule_auto_job(app)
     if AUTO_VIDEO_ENABLED:
         schedule_auto_video_job(app)
+
 
 def main():
     if not TELEGRAM_TOKEN:
@@ -739,6 +774,7 @@ def main():
 
     logger.info("Bot is running...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
