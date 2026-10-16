@@ -1,6 +1,6 @@
 """
-ماژول دوبله ویدیو با Colab
-سه دستور اضافه می‌کنه: /dub, /set_webhook, /check_colab
+ماژول دوبله ویدیو با Colab + انتشار در اینستاگرام
+دستورات: /dub, /set_webhook, /check_colab, /check_instagram, /post_ig
 """
 
 import os
@@ -9,11 +9,10 @@ import asyncio
 import logging
 import requests
 from telegram import Update
-from telegram.ext import ContextTypes, Application
+from telegram.ext import ContextTypes, Application, CommandHandler
 
 logger = logging.getLogger(__name__)
 
-# آدرس Colab (به صورت runtime ست می‌شه)
 COLAB_URL = os.getenv("COLAB_URL", "").strip()
 
 
@@ -25,6 +24,9 @@ def is_admin(update: Update) -> bool:
     return bool(update.effective_user) and update.effective_user.id == get_admin_id()
 
 
+# ═══════════════════════════════════════════════════
+# دوبله
+# ═══════════════════════════════════════════════════
 async def dub_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global COLAB_URL
     if not is_admin(update):
@@ -198,10 +200,86 @@ async def check_colab_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"❌ Colab در دسترس نیست: {str(e)[:200]}")
 
 
+# ═══════════════════════════════════════════════════
+# اینستاگرام
+# ═══════════════════════════════════════════════════
+async def check_instagram_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await update.message.reply_text("⛔️")
+        return
+    await update.message.reply_text("⏳ در حال بررسی اینستاگرام...")
+    try:
+        from instagram import check_login
+        result = check_login()
+        if result["ok"]:
+            await update.message.reply_text(
+                f"✅ اینستاگرام فعاله\n"
+                f"👤 یوزرنیم: @{result['username']}\n"
+                f"👥 دنبال‌کننده: {result['followers']}"
+            )
+        else:
+            await update.message.reply_text(f"❌ خطا:\n{result['error'][:300]}")
+    except Exception as e:
+        logger.exception("Error in check_instagram")
+        await update.message.reply_text(f"❌ خطا: {str(e)[:300]}")
+
+
+async def post_to_instagram_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await update.message.reply_text("⛔️")
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "مثال:\n/post_ig https://youtu.be/XXXX"
+        )
+        return
+
+    video_url = context.args[0].strip()
+    await update.message.reply_text("⏳ در حال آماده‌سازی پست اینستاگرام...")
+
+    try:
+        from io import BytesIO
+        from instagram import post_photo
+
+        vid_id = video_url.split("v=")[-1].split("/")[-1].split("?")[0]
+        thumb_url = f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg"
+
+        r = requests.get(thumb_url, timeout=30)
+        r.raise_for_status()
+
+        tmp_path = f"/tmp/ig_thumb_{vid_id}.jpg"
+        with open(tmp_path, "wb") as f:
+            f.write(r.content)
+
+        caption = (
+            f"🎬 ویدیوی جدید ما منتشر شد!\n\n"
+            f"توی این ویدیو تحلیل کامل بازار رو گفتم.\n\n"
+            f"🔗 لینک ویدیو توی بایو ما\n\n"
+            f"#کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری"
+        )
+
+        media_id = post_photo(tmp_path, caption)
+
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+
+        await update.message.reply_text(
+            f"✅ پست اینستاگرام منتشر شد!\n🆔 {media_id}"
+        )
+    except Exception as e:
+        logger.exception("Error in post_to_instagram")
+        await update.message.reply_text(f"❌ خطا: {str(e)[:300]}")
+
+
+# ═══════════════════════════════════════════════════
+# ثبت handlerها
+# ═══════════════════════════════════════════════════
 def register_dubbing_handlers(app: Application):
-    """این تابع رو توی main.py صدا بزن تا دستورات اضافه بشن."""
-    from telegram.ext import CommandHandler
     app.add_handler(CommandHandler("dub", dub_video_command))
     app.add_handler(CommandHandler("set_webhook", set_webhook_command))
     app.add_handler(CommandHandler("check_colab", check_colab_command))
+    app.add_handler(CommandHandler("check_instagram", check_instagram_command))
+    app.add_handler(CommandHandler("post_ig", post_to_instagram_command))
     logger.info("Dubbing handlers registered.")
