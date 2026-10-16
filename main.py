@@ -26,7 +26,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# خاموش کردن لاگ‌های پرحجم که توکن رو لو می‌دن
 for noisy in ["httpx", "httpcore", "telegram", "telegram.ext",
               "telegram.request", "google", "urllib3", "edge_tts"]:
     logging.getLogger(noisy).setLevel(logging.WARNING)
@@ -277,7 +276,7 @@ def generate_video_script(market_summary: str) -> dict:
 
 
 # ============================================================
-# بخش ۵: TTS با edge-tts
+# بخش ۵: TTS
 # ============================================================
 async def generate_tts(text: str, output_path: str):
     logger.info("Generating TTS... (Proxy: %s)", PROXY_URL or "disabled")
@@ -300,7 +299,7 @@ def fetch_background_image(prompt: str, output_path: str):
 
 
 # ============================================================
-# بخش ۷: ساخت ویدیو با FFmpeg (low-memory)
+# بخش ۷: ساخت ویدیو با FFmpeg
 # ============================================================
 def build_video(image_path: str, audio_path: str, output_path: str):
     cmd = [
@@ -586,14 +585,21 @@ async def auto_video_job(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام! 👋\n\n"
+        "🎬 دوبله ویدیو:\n"
+        "/dub <لینک> — دوبله ویدیوی یوتیوب\n"
+        "/set_webhook <آدرس> — تنظیم آدرس Colab\n"
+        "/check_colab — بررسی وضعیت Colab\n\n"
+        "📸 اینستاگرام:\n"
+        "/check_instagram — بررسی وضعیت اینستاگرام\n"
+        "/post_ig <لینک> — پست در اینستاگرام\n\n"
+        "📝 پست متنی:\n"
         "/generate_post — پست متنی فوری در کانال\n"
         "/generate_video — ساخت ویدیو + ارسال به چت خصوصی\n"
         "/set_youtube_link <url> — پست تبلیغاتی ویدیو در کانال\n"
         "/set_channel @name — تغییر کانال\n"
         "/show_channel — نمایش کانال\n"
         "/debug — اطلاعات عیب‌یابی\n"
-        "/auto_on | /auto_off | /auto_status\n"
-        "/auto_video_on | /auto_video_off"
+        "/auto_on | /auto_off | /auto_status"
     )
 
 
@@ -771,6 +777,10 @@ def main():
     app.add_handler(CommandHandler("auto_status", auto_status))
     app.add_handler(CommandHandler("auto_video_on", auto_video_on))
     app.add_handler(CommandHandler("auto_video_off", auto_video_off))
+
+    # ثبت دستورات دوبله و اینستاگرام
+    from dubbing import register_dubbing_handlers
+    register_dubbing_handlers(app)
 
     logger.info("Bot is running...")
     app.run_polling()
