@@ -17,7 +17,6 @@ _client = None
 
 
 def get_client():
-    """کلاینت اینستاگرام رو می‌سازه یا از session ذخیره‌شده بازیابی می‌کنه."""
     global _client
 
     if _client is not None:
@@ -29,12 +28,10 @@ def get_client():
     cl = Client()
     cl.delay_range = [1, 3]
 
-    # تنظیم User-Agent جدید برای دور زدن خطای نسخه قدیمی
     cl.set_user_agent(
         "Instagram 410.0.0.0.96 Android (33/13; 480dpi; 1080x2400; xiaomi; M2007J20CG; surya; qcom; en_US; 641123490)"
     )
 
-    # اگه session ذخیره شده داریم، ازش استفاده کن
     if Path(IG_SESSION_FILE).exists():
         try:
             cl.load_settings(IG_SESSION_FILE)
@@ -46,7 +43,6 @@ def get_client():
         except Exception as e:
             logger.warning("Session restore failed: %s. Trying fresh login.", e)
 
-    # لاگین تازه
     try:
         cl.login(IG_USERNAME, IG_PASSWORD)
         cl.dump_settings(IG_SESSION_FILE)
