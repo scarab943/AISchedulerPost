@@ -57,7 +57,6 @@ def challenge_code_handler(username, choice):
 
 
 def check_login() -> dict:
-    """بررسی وضعیت لاگین اینستاگرام (دیکشنری برمی‌گردونه)."""
     if not INSTAGRAM_USERNAME or not INSTAGRAM_PASSWORD:
         return {"ok": False, "error": "INSTAGRAM_USERNAME یا INSTAGRAM_PASSWORD تنظیم نشده"}
     
@@ -117,7 +116,7 @@ async def insta_login_command(update, context):
     if res["ok"]:
         await update.message.reply_text("✅ اینستاگرام لاگین شد!")
     else:
-        await update.message.reply_text(f"❌ خطا: {res.get('error')[:300]}")
+        await update.message.reply_text(f"❌ خطا: {res.get('error', '')[:300]}")
 
 
 def register_instagram_handlers(app):
