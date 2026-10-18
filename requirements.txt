@@ -1,6 +1,5 @@
 python-telegram-bot[job-queue]==21.6
-requests==2.32.3
-google-genai==0.3.0
-aiohttp==3.10.5
-edge-tts>=7.2.7
-instagrapi==3.0.10
+requests>=2.34.2
+google-genai>=1.0.0
+aiohttp>=3.10.5
+instagrapi>=2.0.0
