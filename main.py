@@ -3,7 +3,6 @@ import json
 import time
 import asyncio
 import logging
-import threading
 import subprocess
 from io import BytesIO
 from urllib.parse import quote
@@ -19,14 +18,12 @@ from telegram.error import TelegramError
 # ============================================================
 # بخش ۱: لاگ‌ها و متغیرهای محیطی
 # ============================================================
-
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# خاموش کردن لاگ‌های پرحجم که توکن رو لو می‌دن
 for noisy in ["httpx", "httpcore", "telegram", "telegram.ext",
               "telegram.request", "google", "urllib3", "edge_tts"]:
     logging.getLogger(noisy).setLevel(logging.WARNING)
@@ -56,14 +53,13 @@ def is_admin(update: Update) -> bool:
 
 
 # ============================================================
-# بخش ۲: وب‌سرور (اجرا در پروسه جداگانه برای جلوگیری از خطای set_wakeup_fd)
+# بخش ۲: وب‌سرور
 # ============================================================
 async def health(request):
     return web.Response(text="OK")
 
 
 def run_web_server():
-    """این تابع توی یه پروسه‌ی جداگانه اجرا می‌شه، نه ترد."""
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
@@ -592,6 +588,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/set_webhook <آدرس> — تنظیم آدرس Colab\n"
         "/check_colab — بررسی وضعیت Colab\n\n"
         "📸 اینستاگرام:\n"
+        "/insta_login — لاگین به اینستاگرام\n"
         "/check_instagram — بررسی وضعیت اینستاگرام\n"
         "/post_ig <لینک> — پست در اینستاگرام\n\n"
         "📝 پست متنی:\n"
@@ -758,8 +755,7 @@ def main():
     if not TELEGRAM_TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN تنظیم نشده.")
 
-    # وب‌سرور رو توی پروسه‌ی جداگانه اجرا کن (نه ترد)
-    # تا مشکل set_wakeup_fd پیش نیاد
+    # وب‌سرور با multiprocessing
     from multiprocessing import Process
     web_proc = Process(target=run_web_server, daemon=True)
     web_proc.start()
@@ -785,9 +781,13 @@ def main():
     app.add_handler(CommandHandler("auto_video_on", auto_video_on))
     app.add_handler(CommandHandler("auto_video_off", auto_video_off))
 
-    # ثبت دستورات دوبله و اینستاگرام
+    # ثبت دستورات دوبله
     from dubbing import register_dubbing_handlers
     register_dubbing_handlers(app)
+
+    # ثبت دستورات اینستاگرام (مهم: این خط اضافه شد)
+    from instagram import register_instagram_handlers
+    register_instagram_handlers(app)
 
     logger.info("Bot is running...")
     app.run_polling()
