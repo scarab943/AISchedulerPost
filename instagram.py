@@ -28,6 +28,7 @@ def get_client():
     cl = Client()
     cl.delay_range = [1, 3]
 
+    # User-Agent جدید برای دور زدن خطای نسخه قدیمی
     cl.set_user_agent(
         "Instagram 410.0.0.0.96 Android (33/13; 480dpi; 1080x2400; xiaomi; M2007J20CG; surya; qcom; en_US; 641123490)"
     )
@@ -44,8 +45,7 @@ def get_client():
             logger.warning("Session restore failed: %s. Trying fresh login.", e)
 
     try:
-        # استفاده از login_legacy به جای login
-        cl.login_legacy(IG_USERNAME, IG_PASSWORD)
+        cl.login(IG_USERNAME, IG_PASSWORD)
         cl.dump_settings(IG_SESSION_FILE)
         logger.info("✅ Instagram login successful")
         _client = cl
