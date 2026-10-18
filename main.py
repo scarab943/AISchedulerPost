@@ -26,6 +26,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# خاموش کردن لاگ‌های پرحجم که توکن رو لو می‌دن
 for noisy in ["httpx", "httpcore", "telegram", "telegram.ext",
               "telegram.request", "google", "urllib3", "edge_tts"]:
     logging.getLogger(noisy).setLevel(logging.WARNING)
@@ -55,13 +56,14 @@ def is_admin(update: Update) -> bool:
 
 
 # ============================================================
-# بخش ۲: وب‌سرور
+# بخش ۲: وب‌سرور (اجرا در پروسه جداگانه برای جلوگیری از خطای set_wakeup_fd)
 # ============================================================
 async def health(request):
     return web.Response(text="OK")
 
 
 def run_web_server():
+    """این تابع توی یه پروسه‌ی جداگانه اجرا می‌شه، نه ترد."""
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
@@ -756,7 +758,12 @@ def main():
     if not TELEGRAM_TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN تنظیم نشده.")
 
-    threading.Thread(target=run_web_server, daemon=True).start()
+    # وب‌سرور رو توی پروسه‌ی جداگانه اجرا کن (نه ترد)
+    # تا مشکل set_wakeup_fd پیش نیاد
+    from multiprocessing import Process
+    web_proc = Process(target=run_web_server, daemon=True)
+    web_proc.start()
+    logger.info("Web server process started (PID: %s)", web_proc.pid)
 
     app = (
         ApplicationBuilder()
