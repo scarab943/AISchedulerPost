@@ -1,6 +1,3 @@
-"""
-ماژول اینستاگرام - نسخه‌ی پایدار با خواندن کد از ایمیل
-"""
 import os
 import imaplib
 import email
@@ -8,12 +5,10 @@ import re
 import logging
 from instagrapi import Client
 from instagrapi.mixins.challenge import ChallengeChoice
-from instagrapi.exceptions import LoginRequired
 from telegram.ext import CommandHandler
 
 logger = logging.getLogger(__name__)
 
-# اطلاعات از متغیرهای محیطی Railway
 INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME", "").strip()
 INSTAGRAM_PASSWORD = os.getenv("INSTAGRAM_PASSWORD", "").strip()
 EMAIL_USER = os.getenv("INSTAGRAM_EMAIL", "").strip()
@@ -24,25 +19,18 @@ cl = Client()
 
 
 def get_code_from_email(username):
-    """اتصال به ایمیل و استخراج کد تایید اینستاگرام."""
     if not EMAIL_USER or not EMAIL_PASS:
-        logger.error("EMAIL_USER یا EMAIL_PASS تنظیم نشده")
         return False
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(EMAIL_USER, EMAIL_PASS)
         mail.select("inbox")
-
         result, data = mail.search(None, "(UNSEEN)")
-        if result != "OK":
-            return False
-
+        if result != "OK": return False
         ids = data[0].split()
         for num in reversed(ids):
             result, data = mail.fetch(num, "(RFC822)")
-            if result != "OK":
-                continue
-
+            if result != "OK": continue
             msg = email.message_from_bytes(data[0][1])
             body = ""
             if msg.is_multipart():
@@ -52,16 +40,13 @@ def get_code_from_email(username):
                         break
             else:
                 body = msg.get_payload(decode=True).decode(errors="ignore")
-
             match = re.search(r'\b(\d{6})\b', body)
             if match:
                 mail.store(num, '+FLAGS', '\\Seen')
-                logger.info("کد تایید از ایمیل استخراج شد")
                 return match.group(1)
-
         return False
     except Exception as e:
-        logger.error(f"خطا در خواندن ایمیل: {e}")
+        logger.error(f"Email error: {e}")
         return False
 
 
@@ -71,27 +56,30 @@ def challenge_code_handler(username, choice):
     return False
 
 
-def check_login() -> bool:
-    """بررسی وضعیت لاگین اینستاگرام."""
+def check_login() -> dict:
+    """بررسی وضعیت لاگین اینستاگرام (دیکشنری برمی‌گردونه)."""
     if not INSTAGRAM_USERNAME or not INSTAGRAM_PASSWORD:
-        return False
+        return {"ok": False, "error": "INSTAGRAM_USERNAME یا INSTAGRAM_PASSWORD تنظیم نشده"}
+    
     try:
         if os.path.exists(SESSION_FILE):
             cl.load_settings(SESSION_FILE)
             cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-            return True
-    except LoginRequired:
-        pass
+            user_info = cl.user_info(cl.user_id)
+            return {
+                "ok": True, 
+                "username": user_info.username,
+                "followers": user_info.follower_count
+            }
     except Exception as e:
-        logger.warning(f"Session load error: {e}")
-    return False
+        logger.warning(f"Session check error: {e}")
+        
+    return {"ok": False, "error": "لاگین نیستی. اول /insta_login بزن."}
 
 
-def instagram_login() -> bool:
-    """لاگین به اینستاگرام با پشتیبانی از کد تایید."""
+def instagram_login() -> dict:
     if not INSTAGRAM_USERNAME or not INSTAGRAM_PASSWORD:
-        logger.error("INSTAGRAM_USERNAME یا INSTAGRAM_PASSWORD تنظیم نشده")
-        return False
+        return {"ok": False, "error": "یوزرنیم/پسورد ست نشده"}
 
     cl.challenge_code_handler = challenge_code_handler
 
@@ -100,59 +88,37 @@ def instagram_login() -> bool:
             try:
                 cl.load_settings(SESSION_FILE)
                 cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-                logger.info("اینستاگرام با session قبلی لاگین شد")
-                return True
-            except Exception as e:
-                logger.warning(f"Session قدیمی نامعتبر: {e}")
+                return {"ok": True}
+            except Exception:
+                pass
 
         cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
         cl.dump_settings(SESSION_FILE)
-        logger.info("اینستاگرام با موفقیت لاگین شد")
-        return True
+        return {"ok": True}
     except Exception as e:
-        logger.error(f"خطای لاگین اینستاگرام: {e}")
-        return False
+        logger.error(f"Login error: {e}")
+        return {"ok": False, "error": str(e)}
 
 
-def post_to_instagram(image_url: str, caption: str) -> bool:
-    """پست عکس در اینستاگرام."""
-    if not check_login():
-        if not instagram_login():
-            return False
+def post_photo(image_path: str, caption: str) -> str:
+    if not check_login().get("ok"):
+        if not instagram_login().get("ok"):
+            raise Exception("لاگین به اینستاگرام ممکن نشد")
 
-    try:
-        cl.photo_upload(image_url, caption)
-        logger.info("پست در اینستاگرام منتشر شد")
-        return True
-    except Exception as e:
-        logger.error(f"خطای پست اینستاگرام: {e}")
-        return False
+    media = cl.photo_upload(image_path, caption)
+    return str(media.pk)
 
 
-# ============ دستورات تلگرام ============
 async def insta_login_command(update, context):
     if update.effective_user.id != int(os.getenv("ADMIN_ID", "0")):
-        await update.message.reply_text("⛔️")
         return
-    await update.message.reply_text("⏳ در حال لاگین به اینستاگرام...")
-    if instagram_login():
+    await update.message.reply_text("⏳ در حال لاگین...")
+    res = instagram_login()
+    if res["ok"]:
         await update.message.reply_text("✅ اینستاگرام لاگین شد!")
     else:
-        await update.message.reply_text("❌ لاگین ناموفق. لاگ Railway رو چک کن.")
-
-
-async def insta_status_command(update, context):
-    if update.effective_user.id != int(os.getenv("ADMIN_ID", "0")):
-        await update.message.reply_text("⛔️")
-        return
-    if check_login():
-        await update.message.reply_text(f"✅ لاگین هستی ({INSTAGRAM_USERNAME})")
-    else:
-        await update.message.reply_text("❌ لاگین نیستی. /insta_login بزن.")
+        await update.message.reply_text(f"❌ خطا: {res.get('error')[:300]}")
 
 
 def register_instagram_handlers(app):
-    """این تابع توی main.py صدا زده می‌شه."""
     app.add_handler(CommandHandler("insta_login", insta_login_command))
-    app.add_handler(CommandHandler("insta_status", insta_status_command))
-    logger.info("Instagram handlers registered.")
