@@ -5,6 +5,7 @@ import re
 import logging
 from instagrapi import Client
 from instagrapi.mixins.challenge import ChallengeChoice
+from instagrapi.exceptions import ChallengeRequired
 from telegram.ext import CommandHandler
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,8 @@ def check_login() -> dict:
                 "username": user_info.username,
                 "followers": user_info.follower_count
             }
+    except ChallengeRequired:
+        return {"ok": False, "error": "نیاز به تایید هویت (Challenge) داره. /insta_login بزن."}
     except Exception as e:
         logger.warning(f"Session check error: {e}")
         
@@ -88,12 +91,19 @@ def instagram_login() -> dict:
                 cl.load_settings(SESSION_FILE)
                 cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
                 return {"ok": True}
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Session old: {e}")
 
         cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
         cl.dump_settings(SESSION_FILE)
         return {"ok": True}
+    except ChallengeRequired:
+        try:
+            cl.challenge_resolve(cl.last_json)
+            cl.dump_settings(SESSION_FILE)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": f"Challenge failed: {str(e)}"}
     except Exception as e:
         logger.error(f"Login error: {e}")
         return {"ok": False, "error": str(e)}
@@ -103,7 +113,6 @@ def post_photo(image_path: str, caption: str) -> str:
     if not check_login().get("ok"):
         if not instagram_login().get("ok"):
             raise Exception("لاگین به اینستاگرام ممکن نشد")
-
     media = cl.photo_upload(image_path, caption)
     return str(media.pk)
 
