@@ -1,76 +1,66 @@
-"""
-ماژول انتشار در اینستاگرام با Instagrapi
-"""
-
-import os
-import logging
-from pathlib import Path
+import imaplib
+import email
+import re
 from instagrapi import Client
+from instagrapi.mixins.challenge import ChallengeChoice
 
-logger = logging.getLogger(__name__)
+# اطلاعات ایمیل خود را اینجا وارد کن (بهتر است از متغیرهای محیطی Railway استفاده کنی)
+EMAIL_USER = "your_email@gmail.com"
+EMAIL_PASS = "your_app_password"  # برای جیمیل باید "رمز برنامه" بسازی
 
-IG_USERNAME = os.getenv("INSTAGRAM_USERNAME", "").strip()
-IG_PASSWORD = os.getenv("INSTAGRAM_PASSWORD", "").strip()
-IG_SESSION_FILE = "/tmp/ig_session.json"
-
-_client = None
-
-
-def get_client():
-    global _client
-
-    if _client is not None:
-        return _client
-
-    if not IG_USERNAME or not IG_PASSWORD:
-        raise RuntimeError("INSTAGRAM_USERNAME یا INSTAGRAM_PASSWORD تنظیم نشده")
-
-    cl = Client()
-    cl.delay_range = [1, 3]
-
-    # User-Agent جدید برای دور زدن خطای نسخه قدیمی
-    cl.set_user_agent(
-        "Instagram 410.0.0.0.96 Android (33/13; 480dpi; 1080x2400; xiaomi; M2007J20CG; surya; qcom; en_US; 641123490)"
-    )
-
-    if Path(IG_SESSION_FILE).exists():
-        try:
-            cl.load_settings(IG_SESSION_FILE)
-            cl.login(IG_USERNAME, IG_PASSWORD)
-            cl.get_timeline_feed()
-            logger.info("✅ Instagram session restored")
-            _client = cl
-            return cl
-        except Exception as e:
-            logger.warning("Session restore failed: %s. Trying fresh login.", e)
-
+def get_code_from_email(username):
+    """به ایمیل وصل می‌شود و کد تأیید اینستاگرام را پیدا می‌کند."""
     try:
-        cl.login(IG_USERNAME, IG_PASSWORD)
-        cl.dump_settings(IG_SESSION_FILE)
-        logger.info("✅ Instagram login successful")
-        _client = cl
-        return cl
+        # برای جیمیل از imap.gmail.com استفاده کن
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(EMAIL_USER, EMAIL_PASS)
+        mail.select("inbox")
+
+        # جستجوی ایمیل‌های خوانده نشده
+        result, data = mail.search(None, "(UNSEEN)")
+        if result != "OK":
+            return False
+
+        ids = data[0].split()
+        for num in reversed(ids):
+            # دریافت محتوای ایمیل
+            result, data = mail.fetch(num, "(RFC822)")
+            if result != "OK":
+                continue
+            
+            msg = email.message_from_bytes(data[0][1])
+            body = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == "text/plain":
+                        body = part.get_payload(decode=True).decode()
+                        break
+            else:
+                body = msg.get_payload(decode=True).decode()
+
+            # جستجوی کد ۶ رقمی در متن ایمیل
+            # الگوی رایج: "Your Instagram code is: 123456"
+            match = re.search(r'(\d{6})', body)
+            if match:
+                # ایمیل را خوانده شده علامت بزن
+                mail.store(num, '+FLAGS', '\\Seen')
+                return match.group(1)
+        
+        return False
     except Exception as e:
-        logger.error("Instagram login failed: %s", e)
-        raise
+        print(f"Error reading email: {e}")
+        return False
 
+def challenge_code_handler(username, choice):
+    """این تابع توسط instagrapi صدا زده می‌شود."""
+    if choice == ChallengeChoice.EMAIL:
+        return get_code_from_email(username)
+    # اگر از طریق SMS خواست (که معمولاً در ایران کار نمی‌کند)
+    elif choice == ChallengeChoice.SMS:
+        return False  # نمی‌توانیم SMS را خودکار بخوانیم
+    return False
 
-def post_photo(image_path: str, caption: str) -> str:
-    cl = get_client()
-    media = cl.photo_upload(path=image_path, caption=caption)
-    logger.info("✅ Instagram post published: %s", media.pk)
-    return str(media.pk)
-
-
-def check_login() -> dict:
-    try:
-        cl = get_client()
-        user_info = cl.account_info()
-        return {
-            "ok": True,
-            "username": user_info.username,
-            "full_name": user_info.full_name,
-            "followers": user_info.follower_count,
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:300]}
+# --- استفاده در کد اصلی ---
+# cl = Client()
+# cl.challenge_code_handler = challenge_code_handler
+# cl.login(USERNAME, PASSWORD)
