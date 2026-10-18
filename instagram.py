@@ -27,14 +27,19 @@ def get_client():
         raise RuntimeError("INSTAGRAM_USERNAME یا INSTAGRAM_PASSWORD تنظیم نشده")
 
     cl = Client()
-    cl.delay_range = [1, 3]  # تاخیر انسانی بین درخواست‌ها
+    cl.delay_range = [1, 3]
+
+    # تنظیم User-Agent جدید برای دور زدن خطای نسخه قدیمی
+    cl.set_user_agent(
+        "Instagram 410.0.0.0.96 Android (33/13; 480dpi; 1080x2400; xiaomi; M2007J20CG; surya; qcom; en_US; 641123490)"
+    )
 
     # اگه session ذخیره شده داریم، ازش استفاده کن
     if Path(IG_SESSION_FILE).exists():
         try:
             cl.load_settings(IG_SESSION_FILE)
             cl.login(IG_USERNAME, IG_PASSWORD)
-            cl.get_timeline_feed()  # تست session
+            cl.get_timeline_feed()
             logger.info("✅ Instagram session restored")
             _client = cl
             return cl
@@ -54,24 +59,13 @@ def get_client():
 
 
 def post_photo(image_path: str, caption: str) -> str:
-    """
-    یه عکس + کپشن توی اینستاگرام پست می‌کنه.
-    خروجی: media pk (شناسه پست)
-    """
     cl = get_client()
-
-    # آپلود عکس
-    media = cl.photo_upload(
-        path=image_path,
-        caption=caption,
-    )
-
+    media = cl.photo_upload(path=image_path, caption=caption)
     logger.info("✅ Instagram post published: %s", media.pk)
     return str(media.pk)
 
 
 def check_login() -> dict:
-    """وضعیت لاگین رو برمی‌گردونه."""
     try:
         cl = get_client()
         user_info = cl.account_info()
