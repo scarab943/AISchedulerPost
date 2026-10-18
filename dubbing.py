@@ -210,15 +210,18 @@ async def check_instagram_command(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text("⏳ در حال بررسی اینستاگرام...")
     try:
         from instagram import check_login
+        # تابع check_login در instagram.py یک دیکشنری برمی‌گرداند
         result = check_login()
-        if result["ok"]:
+        if isinstance(result, dict) and result.get("ok"):
             await update.message.reply_text(
                 f"✅ اینستاگرام فعاله\n"
-                f"👤 یوزرنیم: @{result['username']}\n"
-                f"👥 دنبال‌کننده: {result['followers']}"
+                f"👤 یوزرنیم: @{result.get('username')}\n"
+                f"👥 دنبال‌کننده: {result.get('followers')}"
             )
+        elif isinstance(result, dict):
+            await update.message.reply_text(f"❌ خطا:\n{str(result.get('error'))[:300]}")
         else:
-            await update.message.reply_text(f"❌ خطا:\n{result['error'][:300]}")
+            await update.message.reply_text(f"❌ وضعیت نامشخص: {result}")
     except Exception as e:
         logger.exception("Error in check_instagram")
         await update.message.reply_text(f"❌ خطا: {str(e)[:300]}")
@@ -238,7 +241,6 @@ async def post_to_instagram_command(update: Update, context: ContextTypes.DEFAUL
     await update.message.reply_text("⏳ در حال آماده‌سازی پست اینستاگرام...")
 
     try:
-        from io import BytesIO
         from instagram import post_photo
 
         vid_id = video_url.split("v=")[-1].split("/")[-1].split("?")[0]
