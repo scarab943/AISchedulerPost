@@ -44,7 +44,8 @@ def get_client():
             logger.warning("Session restore failed: %s. Trying fresh login.", e)
 
     try:
-        cl.login(IG_USERNAME, IG_PASSWORD)
+        # استفاده از login_legacy به جای login
+        cl.login_legacy(IG_USERNAME, IG_PASSWORD)
         cl.dump_settings(IG_SESSION_FILE)
         logger.info("✅ Instagram login successful")
         _client = cl
