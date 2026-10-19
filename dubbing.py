@@ -8,12 +8,17 @@ import time
 import asyncio
 import logging
 import requests
+from io import BytesIO
 from telegram import Update
 from telegram.ext import ContextTypes, Application, CommandHandler
+from google import genai
 
 logger = logging.getLogger(__name__)
 
 COLAB_URL = os.getenv("COLAB_URL", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = "gemini-flash-latest"
+GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
 def get_admin_id() -> int:
@@ -83,10 +88,11 @@ async def dub_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 last_status = status
 
             if status == "done":
+                translation = data.get('translation', '')
                 await update.message.reply_text(
                     f"✅ دوبله کامل شد!\n"
                     f"📊 حجم: {data.get('size_mb', 0):.1f} MB\n"
-                    f"📝 ترجمه:\n{data.get('translation', '')[:500]}"
+                    f"📝 ترجمه:\n{translation[:500]}"
                 )
 
                 video_path = data.get("video_path", "")
@@ -119,11 +125,13 @@ async def dub_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             caption=(
                                 f"🎬 ویدیوی دوبله‌شده آماده است!\n\n"
                                 f"📊 حجم: {file_size:.1f} MB\n\n"
+                                f"📝 موضوع ویدیو:\n{translation[:300]}...\n\n"
                                 f"━━━━━━━━━━━━━━━\n"
                                 f"🔹 ۱. ویدیو رو دانلود کن\n"
                                 f"🔹 ۲. توی یوتیوب آپلود کن\n"
                                 f"🔹 ۳. لینک رو برام بفرست:\n"
-                                f"/set_youtube_link https://youtu.be/XXXX"
+                                f"/set_youtube_link https://youtu.be/XXXX\n"
+                                f"🔹 ۴. برای اینستاگرام: /post_ig https://youtu.be/XXXX"
                             ),
                             supports_streaming=True,
                         )
@@ -201,6 +209,84 @@ async def check_colab_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ═══════════════════════════════════════════════════
+# پست تبلیغاتی تلگرام (بر اساس متن ویدیو)
+# ═══════════════════════════════════════════════════
+async def set_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await update.message.reply_text("⛔️ شما اجازه این کار را ندارید.")
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "مثال:\n/set_youtube_link https://youtu.be/dQw4w9WgXcQ"
+        )
+        return
+
+    video_url = context.args[0].strip()
+    await update.message.reply_text("⏳ در حال ساخت پست تبلیغاتی...")
+
+    try:
+        # دریافت متن ویدیو از main.py
+        import main
+        translation = getattr(main, "LAST_VIDEO_TRANSLATION", "")
+
+        if not translation:
+            translation = "یه ویدیوی جدید و جذاب که نباید از دستش بدی!"
+
+        prompt = f"""تو یک کپی‌رایتر حرفه‌ای برای کانال تلگرام کریپتو هستی.
+یه ویدیو دوبله شده با این متن:
+{translation[:1000]}
+
+حالا یه پست تبلیغاتی جذاب بنویس که کاربر رو ترغیب کنه ویدیو رو ببینه.
+شرایط:
+- لحن صمیمی و خودمونی
+- اشاره به موضوع اصلی ویدیو (نه تحلیل بازار)
+- ۵-۸ ایموجی
+- آخرش حتماً اینا باشه:
+🔗 لینک ویدیو: {video_url}
+🔔 ما رو دنبال کنید: @KriptoKlik
+#کریپتو #ویدیو
+
+فقط متن پست رو برگردون. کمتر از ۸۰۰ کاراکتر."""
+
+        if GEMINI_CLIENT:
+            resp = GEMINI_CLIENT.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            post_text = resp.text.strip()
+        else:
+            post_text = (
+                f"🎬 ویدیوی جدید ما منتشر شد!\n\n"
+                f"موضوع: {translation[:200]}...\n\n"
+                f"🔗 لینک ویدیو: {video_url}\n\n"
+                f"🔔 @KriptoKlik\n"
+                f"#کریپتو #ویدیو"
+            )
+
+        if len(post_text) > 1000:
+            post_text = post_text[:997] + "..."
+
+        thumb_url = f"https://img.youtube.com/vi/{video_url.split('v=')[-1].split('/')[-1]}/maxresdefault.jpg"
+        if "youtu.be/" in video_url:
+            vid_id = video_url.split("youtu.be/")[-1].split("?")[0]
+            thumb_url = f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg"
+
+        target_channel = os.getenv("TARGET_CHANNEL", "@KriptoKlik")
+        try:
+            thumb_resp = requests.get(thumb_url, timeout=30)
+            if thumb_resp.status_code == 200 and len(thumb_resp.content) > 1000:
+                photo = BytesIO(thumb_resp.content)
+                photo.name = "thumb.jpg"
+                await context.bot.send_photo(chat_id=target_channel, photo=photo, caption=post_text)
+            else:
+                await context.bot.send_message(chat_id=target_channel, text=post_text)
+        except Exception:
+            await context.bot.send_message(chat_id=target_channel, text=post_text)
+
+        await update.message.reply_text("✅ پست تبلیغاتی در کانال منتشر شد.")
+    except Exception as e:
+        logger.exception("Error in set_youtube_link")
+        await update.message.reply_text(f"❌ خطا: {str(e)[:300]}")
+
+
+# ═══════════════════════════════════════════════════
 # اینستاگرام
 # ═══════════════════════════════════════════════════
 async def check_instagram_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -241,10 +327,33 @@ async def post_to_instagram_command(update: Update, context: ContextTypes.DEFAUL
 
     try:
         from instagram import post_photo
+        import main
+
+        # دریافت متن ویدیو از main.py
+        translation = getattr(main, "LAST_VIDEO_TRANSLATION", "")
+        if not translation:
+            translation = "یه ویدیوی جدید و جذاب که نباید از دستش بدی!"
+
+        prompt = f"""تو یک کپی‌رایتر حرفه‌ای برای اینستاگرام هستی.
+یه ویدیو دوبله شده با این متن:
+{translation[:1000]}
+
+یه کپشن جذاب برای اینستاگرام بنویس.
+شرایط:
+- اشاره به موضوع اصلی ویدیو
+- لحن صمیمی
+- ۵-۸ ایموجی
+- آخرش حتماً: 🔗 لینک ویدیو توی بایو ما
+- هشتگ‌ها: #کریپتو #بیت_کوین #اتریوم #ترید"""
+
+        if GEMINI_CLIENT:
+            resp = GEMINI_CLIENT.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            caption = resp.text.strip()
+        else:
+            caption = f"🎬 ویدیوی جدید ما منتشر شد!\n\n{translation[:200]}...\n\n🔗 لینک توی بایو\n#کریپتو"
 
         vid_id = video_url.split("v=")[-1].split("/")[-1].split("?")[0]
         
-        # تلاش اول با maxresdefault، اگر نشد hqdefault
         thumb_url = f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg"
         r = requests.get(thumb_url, timeout=30)
         
@@ -257,13 +366,6 @@ async def post_to_instagram_command(update: Update, context: ContextTypes.DEFAUL
         tmp_path = f"/tmp/ig_thumb_{vid_id}.jpg"
         with open(tmp_path, "wb") as f:
             f.write(r.content)
-
-        caption = (
-            f"🎬 ویدیوی جدید ما منتشر شد!\n\n"
-            f"توی این ویدیو تحلیل کامل بازار رو گفتم.\n\n"
-            f"🔗 لینک ویدیو توی بایو ما\n\n"
-            f"#کریپتو #بیت_کوین #اتریوم #ترید #سرمایه_گذاری"
-        )
 
         media_id = post_photo(tmp_path, caption)
 
@@ -289,4 +391,8 @@ def register_dubbing_handlers(app: Application):
     app.add_handler(CommandHandler("check_colab", check_colab_command))
     app.add_handler(CommandHandler("check_instagram", check_instagram_command))
     app.add_handler(CommandHandler("post_ig", post_to_instagram_command))
+    
+    # اضافه کردن set_youtube_link به این فایل (چون در main.py هم هست، اینجا نیازی نیست)
+    # اما برای اینکه دوبله بتونه پیام بفرسته، این handler باید در main.py ثبت بشه.
+    
     logger.info("Dubbing handlers registered.")
