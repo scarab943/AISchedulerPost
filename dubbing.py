@@ -1,6 +1,5 @@
 """
 ماژول دوبله ویدیو با Colab + انتشار در اینستاگرام
-دستورات: /dub, /set_webhook, /check_colab, /check_instagram, /post_ig
 """
 
 import os
@@ -11,14 +10,10 @@ import requests
 from io import BytesIO
 from telegram import Update
 from telegram.ext import ContextTypes, Application, CommandHandler
-from google import genai
 
 logger = logging.getLogger(__name__)
 
 COLAB_URL = os.getenv("COLAB_URL", "").strip()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = "gemini-flash-latest"
-GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
 def get_admin_id() -> int:
@@ -29,6 +24,9 @@ def is_admin(update: Update) -> bool:
     return bool(update.effective_user) and update.effective_user.id == get_admin_id()
 
 
+# ═══════════════════════════════════════════════════
+# دوبله (بدون تغییر)
+# ═══════════════════════════════════════════════════
 async def dub_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global COLAB_URL
     if not is_admin(update):
@@ -205,6 +203,9 @@ async def check_colab_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"❌ Colab در دسترس نیست: {str(e)[:200]}")
 
 
+# ═══════════════════════════════════════════════════
+# اینستاگرام (اصلاح‌شده)
+# ═══════════════════════════════════════════════════
 async def check_instagram_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️")
@@ -233,64 +234,36 @@ async def post_to_instagram_command(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("⛔️")
         return
     if not context.args:
-        await update.message.reply_text(
-            "مثال:\n/post_ig https://youtu.be/XXXX"
-        )
+        await update.message.reply_text("مثال:\n/post_ig https://youtu.be/XXXX")
         return
 
     video_url = context.args[0].strip()
-    await update.message.reply_text("⏳ در حال آماده‌سازی پست اینستاگرام...")
+    await update.message.reply_text("⏳ در حال آماده‌سازی ویدیو برای اینستاگرام...")
 
     try:
-        from instagram import post_photo
+        from instagram import post_video
         import main
 
+        # گرفتن مسیر ویدیوی دوبله‌شده از main.py
+        video_path = getattr(main, "LAST_VIDEO_PATH", "")
         translation = getattr(main, "LAST_VIDEO_TRANSLATION", "")
-        if not translation:
-            translation = "یه ویدیوی جدید و جذاب که نباید از دستش بدی!"
 
-        prompt = f"""تو یک کپی‌رایتر حرفه‌ای برای اینستاگرام هستی.
-یه ویدیو دوبله شده با این متن:
-{translation[:1000]}
+        if not video_path or not os.path.exists(video_path):
+            await update.message.reply_text("❌ فایل ویدیویی پیدا نشد. لطفاً اول ویدیو رو دوبله کن.")
+            return
 
-یه کپشن جذاب برای اینستاگرام بنویس.
-شرایط:
-- اشاره به موضوع اصلی ویدیو
-- لحن صمیمی
-- ۵-۸ ایموجی
-- آخرش حتماً: 🔗 لینک ویدیو توی بایو ما
-- هشتگ‌ها: #کریپتو #بیت_کوین #اتریوم #ترید"""
+        # استفاده مستقیم از متن ویدیو برای کپشن (بدون دخالت Gemini)
+        caption = (
+            f"{translation[:1500]}\n\n"
+            f"🔗 لینک کامل ویدیو توی بایو ما\n"
+            f"#کریپتو #بیت_کوین #اتریوم #ترید"
+        )
 
-        if GEMINI_CLIENT:
-            resp = GEMINI_CLIENT.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-            caption = resp.text.strip()
-        else:
-            caption = f"🎬 ویدیوی جدید ما منتشر شد!\n\n{translation[:200]}...\n\n🔗 لینک توی بایو\n#کریپتو"
-
-        vid_id = video_url.split("v=")[-1].split("/")[-1].split("?")[0]
-        
-        thumb_url = f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg"
-        r = requests.get(thumb_url, timeout=30)
-        
-        if r.status_code != 200 or len(r.content) < 5000:
-            thumb_url = f"https://img.youtube.com/vi/{vid_id}/hqdefault.jpg"
-            r = requests.get(thumb_url, timeout=30)
-        
-        r.raise_for_status()
-
-        tmp_path = f"/tmp/ig_thumb_{vid_id}.jpg"
-        with open(tmp_path, "wb") as f:
-            f.write(r.content)
-
-        media_id = post_photo(tmp_path, caption)
-
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+        # آپلود ویدیو به عنوان Reel
+        media_id = post_video(video_path, caption)
 
         await update.message.reply_text(
-            f"✅ پست اینستاگرام منتشر شد!\n🆔 {media_id}"
+            f"✅ ویدیو در اینستاگرام پست شد!\n🆔 {media_id}"
         )
     except Exception as e:
         logger.exception("Error in post_to_instagram")
