@@ -210,7 +210,6 @@ async def check_instagram_command(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text("⏳ در حال بررسی اینستاگرام...")
     try:
         from instagram import check_login
-        # تابع check_login در instagram.py یک دیکشنری برمی‌گرداند
         result = check_login()
         if isinstance(result, dict) and result.get("ok"):
             await update.message.reply_text(
@@ -244,9 +243,15 @@ async def post_to_instagram_command(update: Update, context: ContextTypes.DEFAUL
         from instagram import post_photo
 
         vid_id = video_url.split("v=")[-1].split("/")[-1].split("?")[0]
+        
+        # تلاش اول با maxresdefault، اگر نشد hqdefault
         thumb_url = f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg"
-
         r = requests.get(thumb_url, timeout=30)
+        
+        if r.status_code != 200 or len(r.content) < 5000:
+            thumb_url = f"https://img.youtube.com/vi/{vid_id}/hqdefault.jpg"
+            r = requests.get(thumb_url, timeout=30)
+        
         r.raise_for_status()
 
         tmp_path = f"/tmp/ig_thumb_{vid_id}.jpg"
