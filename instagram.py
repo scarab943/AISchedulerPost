@@ -34,16 +34,12 @@ def instagram_login() -> dict:
     return check_login()
 
 
-def post_photo(image_path: str, caption: str) -> str:
+def post_video(video_path: str, caption: str) -> str:
+    """آپلود ویدیو به عنوان Reel در اینستاگرام"""
     if not check_login().get("ok"):
         raise Exception("لاگین به اینستاگرام ممکن نشد. sessionid رو چک کن.")
 
-    # اگه فایل ویدیو بود، ویدیو آپلود کن
-    if image_path.endswith(('.mp4', '.mov')):
-        media = cl.clip_upload(image_path, caption)
-    else:
-        media = cl.photo_upload(image_path, caption)
-    
+    media = cl.clip_upload(video_path, caption)
     return str(media.pk)
 
 
