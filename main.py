@@ -47,6 +47,9 @@ AUTO_JOB_NAME = "auto_post"
 AUTO_VIDEO_JOB_NAME = "auto_video"
 CAPTION_LIMIT = 1000
 
+# متغیر برای نگهداری متن آخرین ویدیو (برای پست تبلیغاتی)
+LAST_VIDEO_TRANSLATION = ""
+
 
 def is_admin(update: Update) -> bool:
     return bool(update.effective_user) and update.effective_user.id == ADMIN_ID
@@ -409,12 +412,17 @@ async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
 # بخش ۱۰: ویدیو به DM ادمین
 # ============================================================
 async def build_and_send_video_to_admin(context: ContextTypes.DEFAULT_TYPE):
+    global LAST_VIDEO_TRANSLATION
     logger.info("VIDEO STEP 1: fetching market data...")
     market_data, summary = fetch_crypto_data()
 
     logger.info("VIDEO STEP 2-5: creating video...")
     video_info = await create_video(summary)
     logger.info("Video created: %s", video_info["video_path"])
+
+    # ذخیره متن ویدیو برای استفاده در پست تبلیغاتی
+    LAST_VIDEO_TRANSLATION = video_info.get("script", "")
+    logger.info("Saved LAST_VIDEO_TRANSLATION (length: %d)", len(LAST_VIDEO_TRANSLATION))
 
     caption = (
         f"🎬 ویدیوی آماده برای آپلود در یوتیوب\n\n"
@@ -457,6 +465,7 @@ async def build_and_send_video_to_admin(context: ContextTypes.DEFAULT_TYPE):
 # بخش ۱۱: پست تبلیغاتی ویدیو
 # ============================================================
 async def set_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global LAST_VIDEO_TRANSLATION
     if not is_admin(update):
         await update.message.reply_text("⛔️ شما اجازه این کار را ندارید.")
         return
@@ -470,24 +479,25 @@ async def set_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ در حال ساخت پست تبلیغاتی...")
 
     try:
-        market_data, summary = fetch_crypto_data()
+        # استفاده از متن ویدیو برای ساخت پست
+        translation = LAST_VIDEO_TRANSLATION or "یه ویدیوی جدید و جذاب!"
 
-        prompt = f"""یه پست تبلیغاتی فارسی برای کانال تلگرام کریپتو بنویس که کاربر رو ترغیب کنه ویدیوی یوتیوب رو ببینه.
+        prompt = f"""تو یک کپی‌رایتر حرفه‌ای برای کانال تلگرام کریپتو هستی.
+یه ویدیو دوبله شده با این متن:
+{translation[:1000]}
 
-لینک ویدیو: {video_url}
-وضعیت بازار: {summary}
-
+حالا یه پست تبلیغاتی جذاب بنویس که کاربر رو ترغیب کنه ویدیو رو ببینه.
 شرایط:
 - لحن صمیمی و خودمونی
-- شروع با جمله‌ی قلاب‌دار
-- ۲-۳ خط توضیح در مورد چیزی که توی ویدیو هست
+- اشاره به موضوع اصلی ویدیو (نه تحلیل بازار)
 - ۵-۸ ایموجی
-- آخرش حتماً:
+- آخرش حتماً اینا باشه:
 🔗 لینک ویدیو: {video_url}
 🔔 ما رو دنبال کنید: @KriptoKlik
-#کریپتو #تحلیل_بازار #ویدیو
+#کریپتو #ویدیو
 
 فقط متن پست رو برگردون. کمتر از ۸۰۰ کاراکتر."""
+
         try:
             resp = GEMINI_CLIENT.models.generate_content(
                 model=GEMINI_MODEL,
@@ -497,10 +507,10 @@ async def set_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             post_text = (
                 f"🎬 ویدیوی جدید ما منتشر شد!\n\n"
-                f"توی این ویدیو تحلیل کامل بازار رو گفتم.\n\n"
+                f"{translation[:200]}...\n\n"
                 f"🔗 لینک ویدیو: {video_url}\n\n"
                 f"🔔 ما رو دنبال کنید: @KriptoKlik\n"
-                f"#کریپتو #تحلیل_بازار #ویدیو"
+                f"#کریپتو #ویدیو"
             )
 
         if len(post_text) > CAPTION_LIMIT:
@@ -785,7 +795,7 @@ def main():
     from dubbing import register_dubbing_handlers
     register_dubbing_handlers(app)
 
-    # ثبت دستورات اینستاگرام (مهم: این خط اضافه شد)
+    # ثبت دستورات اینستاگرام
     from instagram import register_instagram_handlers
     register_instagram_handlers(app)
 
