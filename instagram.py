@@ -11,16 +11,13 @@ cl = Client()
 
 
 def check_login() -> dict:
-    """بررسی وضعیت لاگین با sessionid."""
     if not INSTAGRAM_SESSIONID:
         return {"ok": False, "error": "INSTAGRAM_SESSIONID تنظیم نشده"}
 
     try:
-        # دیکد کردن sessionid (چون از مرورگر کپی شده و URL-encoded هست)
         import urllib.parse
         decoded_session = urllib.parse.unquote(INSTAGRAM_SESSIONID)
         
-        # استفاده از sessionid برای لاگین
         cl.login_by_sessionid(decoded_session)
         user_info = cl.user_info(cl.user_id)
         return {
@@ -41,7 +38,12 @@ def post_photo(image_path: str, caption: str) -> str:
     if not check_login().get("ok"):
         raise Exception("لاگین به اینستاگرام ممکن نشد. sessionid رو چک کن.")
 
-    media = cl.photo_upload(image_path, caption)
+    # اگه فایل ویدیو بود، ویدیو آپلود کن
+    if image_path.endswith(('.mp4', '.mov')):
+        media = cl.clip_upload(image_path, caption)
+    else:
+        media = cl.photo_upload(image_path, caption)
+    
     return str(media.pk)
 
 
