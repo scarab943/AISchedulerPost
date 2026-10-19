@@ -15,9 +15,6 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram.error import TelegramError
 
-# ============================================================
-# بخش ۱: لاگ‌ها و متغیرهای محیطی
-# ============================================================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -47,17 +44,15 @@ AUTO_JOB_NAME = "auto_post"
 AUTO_VIDEO_JOB_NAME = "auto_video"
 CAPTION_LIMIT = 1000
 
-# متغیر برای نگهداری متن آخرین ویدیو (برای پست تبلیغاتی)
+# متغیرهای گلوبال برای استفاده در پست اینستاگرام
 LAST_VIDEO_TRANSLATION = ""
+LAST_VIDEO_PATH = ""
 
 
 def is_admin(update: Update) -> bool:
     return bool(update.effective_user) and update.effective_user.id == ADMIN_ID
 
 
-# ============================================================
-# بخش ۲: وب‌سرور
-# ============================================================
 async def health(request):
     return web.Response(text="OK")
 
@@ -71,9 +66,6 @@ def run_web_server():
     web.run_app(app, host="0.0.0.0", port=port, print=None)
 
 
-# ============================================================
-# بخش ۳: CoinGecko
-# ============================================================
 def fetch_crypto_data():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {
@@ -171,9 +163,6 @@ def build_chart_url(coin_id: str) -> str:
     return f"https://quickchart.io/chart?c={encoded}&w=800&h=400&bg=0f0f0f&f=png"
 
 
-# ============================================================
-# بخش ۴: Gemini
-# ============================================================
 def generate_post_text(market_summary: str) -> str:
     fallback = (
         "🚀 وضعیت لحظه‌ای بازار کریپتو\n\n"
@@ -276,9 +265,6 @@ def generate_video_script(market_summary: str) -> dict:
         return fallback
 
 
-# ============================================================
-# بخش ۵: TTS
-# ============================================================
 async def generate_tts(text: str, output_path: str):
     logger.info("Generating TTS... (Proxy: %s)", PROXY_URL or "disabled")
     communicate = edge_tts.Communicate(text, PERSIAN_VOICE, proxy=PROXY_URL or None)
@@ -286,9 +272,6 @@ async def generate_tts(text: str, output_path: str):
     logger.info("TTS saved to %s", output_path)
 
 
-# ============================================================
-# بخش ۶: تصویر پس‌زمینه
-# ============================================================
 def fetch_background_image(prompt: str, output_path: str):
     encoded = quote(prompt, safe="")
     url = f"https://image.pollinations.ai/prompt/{encoded}?width=720&height=1280&nologo=true&seed={int(time.time())}"
@@ -299,9 +282,6 @@ def fetch_background_image(prompt: str, output_path: str):
     logger.info("Background image saved (%d bytes)", len(r.content))
 
 
-# ============================================================
-# بخش ۷: ساخت ویدیو با FFmpeg
-# ============================================================
 def build_video(image_path: str, audio_path: str, output_path: str):
     cmd = [
         "ffmpeg", "-y",
@@ -331,9 +311,6 @@ def build_video(image_path: str, audio_path: str, output_path: str):
     logger.info("Video built: %s", output_path)
 
 
-# ============================================================
-# بخش ۸: ساخت کامل ویدیو
-# ============================================================
 async def create_video(market_summary: str) -> dict:
     os.makedirs(WORKSPACE, exist_ok=True)
     timestamp = int(time.time())
@@ -374,9 +351,6 @@ async def create_video(market_summary: str) -> dict:
     }
 
 
-# ============================================================
-# بخش ۹: پست متنی
-# ============================================================
 async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
     logger.info("POST STEP 1: fetching market data...")
     market_data, summary = fetch_crypto_data()
@@ -408,11 +382,8 @@ async def build_and_send_post(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=TARGET_CHANNEL, text=post_text)
 
 
-# ============================================================
-# بخش ۱۰: ویدیو به DM ادمین
-# ============================================================
 async def build_and_send_video_to_admin(context: ContextTypes.DEFAULT_TYPE):
-    global LAST_VIDEO_TRANSLATION
+    global LAST_VIDEO_TRANSLATION, LAST_VIDEO_PATH
     logger.info("VIDEO STEP 1: fetching market data...")
     market_data, summary = fetch_crypto_data()
 
@@ -420,9 +391,10 @@ async def build_and_send_video_to_admin(context: ContextTypes.DEFAULT_TYPE):
     video_info = await create_video(summary)
     logger.info("Video created: %s", video_info["video_path"])
 
-    # ذخیره متن ویدیو برای استفاده در پست تبلیغاتی
+    # ذخیره متن و مسیر ویدیو برای استفاده در پست تبلیغاتی
     LAST_VIDEO_TRANSLATION = video_info.get("script", "")
-    logger.info("Saved LAST_VIDEO_TRANSLATION (length: %d)", len(LAST_VIDEO_TRANSLATION))
+    LAST_VIDEO_PATH = video_info.get("video_path", "")
+    logger.info("Saved LAST_VIDEO_TRANSLATION (len: %d) and LAST_VIDEO_PATH", len(LAST_VIDEO_TRANSLATION))
 
     caption = (
         f"🎬 ویدیوی آماده برای آپلود در یوتیوب\n\n"
@@ -434,6 +406,7 @@ async def build_and_send_video_to_admin(context: ContextTypes.DEFAULT_TYPE):
         f"🔹 ۱. ویدیو رو دانلود کن\n"
         f"🔹 ۲. توی یوتیوب آپلود کن (با همین عنوان/توضیحات/تگ‌ها)\n"
         f"🔹 ۳. لینک یوتیوب رو برام بفرست: /set_youtube_link https://youtu.be/XXXX\n"
+        f"🔹 ۴. برای پست در اینستاگرام: /post_ig https://youtu.be/XXXX"
     )
 
     try:
@@ -461,9 +434,6 @@ async def build_and_send_video_to_admin(context: ContextTypes.DEFAULT_TYPE):
         pass
 
 
-# ============================================================
-# بخش ۱۱: پست تبلیغاتی ویدیو
-# ============================================================
 async def set_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global LAST_VIDEO_TRANSLATION
     if not is_admin(update):
@@ -479,8 +449,7 @@ async def set_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ در حال ساخت پست تبلیغاتی...")
 
     try:
-        # استفاده از متن ویدیو برای ساخت پست
-        translation = LAST_VIDEO_TRANSLATION or "یه ویدیوی جدید و جذاب!"
+        translation = LAST_VIDEO_TRANSLATION or "یه ویدیوی جدید و جذاب که نباید از دستش بدی!"
 
         prompt = f"""تو یک کپی‌رایتر حرفه‌ای برای کانال تلگرام کریپتو هستی.
 یه ویدیو دوبله شده با این متن:
@@ -548,9 +517,6 @@ async def set_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ خطا: {type(e).__name__}: {str(e)[:200]}")
 
 
-# ============================================================
-# بخش ۱۲: زمان‌بند
-# ============================================================
 def schedule_auto_job(app):
     jq = app.job_queue
     for job in jq.get_jobs_by_name(AUTO_JOB_NAME):
@@ -587,9 +553,6 @@ async def auto_video_job(context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Auto-video failed")
 
 
-# ============================================================
-# بخش ۱۳: دستورات
-# ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام! 👋\n\n"
@@ -614,7 +577,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
-        await update.message.reply_text("⛔️ شما اجازه این کار را ندارید.")
+        await update.message.reply_text("⛔️")
         return
     jobs = context.job_queue.get_jobs_by_name(AUTO_JOB_NAME)
     vjobs = context.job_queue.get_jobs_by_name(AUTO_VIDEO_JOB_NAME)
@@ -688,16 +651,14 @@ async def generate_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await build_and_send_video_to_admin(context)
         await update.message.reply_text(
             "✅ ویدیو ساخته و به چت خصوصی ارسال شد.\n"
-            "حالا دانلودش کن، توی یوتیوب آپلود کن، و لینکش رو با /set_youtube_link برام بفرست."
+            "حالا دانلودش کن، توی یوتیوب آپلود کن، و لینکش رو با /set_youtube_link برام بفرست.\n"
+            "برای پست در اینستاگرام هم از /post_ig استفاده کن."
         )
     except Exception as e:
         logger.exception("Error generate_video")
         await update.message.reply_text(f"❌ {type(e).__name__}: {str(e)[:200]}")
 
 
-# ============================================================
-# بخش ۱۴: auto commands
-# ============================================================
 async def auto_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️")
@@ -751,9 +712,6 @@ async def auto_video_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🛑 ساخت خودکار ویدیو خاموش شد.")
 
 
-# ============================================================
-# بخش ۱۵: راه‌اندازی
-# ============================================================
 async def post_init(app):
     if AUTO_POST_ENABLED:
         schedule_auto_job(app)
@@ -765,7 +723,6 @@ def main():
     if not TELEGRAM_TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN تنظیم نشده.")
 
-    # وب‌سرور با multiprocessing
     from multiprocessing import Process
     web_proc = Process(target=run_web_server, daemon=True)
     web_proc.start()
@@ -791,11 +748,9 @@ def main():
     app.add_handler(CommandHandler("auto_video_on", auto_video_on))
     app.add_handler(CommandHandler("auto_video_off", auto_video_off))
 
-    # ثبت دستورات دوبله
     from dubbing import register_dubbing_handlers
     register_dubbing_handlers(app)
 
-    # ثبت دستورات اینستاگرام
     from instagram import register_instagram_handlers
     register_instagram_handlers(app)
 
