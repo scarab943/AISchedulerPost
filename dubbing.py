@@ -10,10 +10,14 @@ import requests
 from io import BytesIO
 from telegram import Update
 from telegram.ext import ContextTypes, Application, CommandHandler
+from google import genai
 
 logger = logging.getLogger(__name__)
 
 COLAB_URL = os.getenv("COLAB_URL", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = "gemini-flash-latest"
+GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
 def get_admin_id() -> int:
@@ -24,9 +28,6 @@ def is_admin(update: Update) -> bool:
     return bool(update.effective_user) and update.effective_user.id == get_admin_id()
 
 
-# ═══════════════════════════════════════════════════
-# دوبله (بدون تغییر)
-# ═══════════════════════════════════════════════════
 async def dub_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global COLAB_URL
     if not is_admin(update):
@@ -113,6 +114,11 @@ async def dub_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     file_size = os.path.getsize(local_path) / (1024 * 1024)
                     logger.info("Video downloaded: %.1f MB", file_size)
 
+                    # ذخیره مسیر فایل در main.py برای استفاده در اینستاگرام
+                    import main
+                    main.LAST_VIDEO_PATH = local_path
+                    main.LAST_VIDEO_TRANSLATION = translation
+
                     with open(local_path, "rb") as f:
                         await context.bot.send_video(
                             chat_id=get_admin_id(),
@@ -132,10 +138,7 @@ async def dub_video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     logger.info("Video sent to admin.")
 
-                    try:
-                        os.remove(local_path)
-                    except Exception:
-                        pass
+                    # ⚠️ فایل رو پاک نمی‌کنیم تا برای پست اینستاگرام باقی بمونه
 
                 except Exception as e:
                     logger.exception("Error downloading video")
@@ -203,9 +206,6 @@ async def check_colab_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"❌ Colab در دسترس نیست: {str(e)[:200]}")
 
 
-# ═══════════════════════════════════════════════════
-# اینستاگرام (اصلاح‌شده)
-# ═══════════════════════════════════════════════════
 async def check_instagram_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("⛔️")
